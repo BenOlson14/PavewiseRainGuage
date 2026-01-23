@@ -406,6 +406,15 @@ static bool connectNetwork(String &iccid,String &imei,int &rssi) {
   return true;
 }
 
+// Convert NMEA ddmm.mmmm or dddmm.mmmm into decimal degrees.
+static double nmeaDdmmToDeg(const String &ddmm) {
+  int dot = ddmm.indexOf('.');
+  int degLen = (dot >= 0 && dot > 4) ? 3 : 2;     // lon often has 3 deg digits
+  double deg = ddmm.substring(0, degLen).toDouble();
+  double min = ddmm.substring(degLen).toDouble();
+  return deg + (min / 60.0);
+}
+
 static bool parseCgpsInfo(const String &resp,double &latOut,double &lonOut,bool &hasEpoch,uint32_t &epochOut){
   int idx=resp.indexOf(":");
   String p=(idx>=0)?resp.substring(idx+1):resp; p.trim();
@@ -425,14 +434,7 @@ static bool parseCgpsInfo(const String &resp,double &latOut,double &lonOut,bool 
   String lonStr=parts[2]; lonStr.trim();
   String ew=parts[3]; ew.trim();
 
-  auto nmeaToDeg=[](const String &ddmm)->double{
-    int dot=ddmm.indexOf('.');
-    int degLen=(dot>=0&&dot>4)?3:2;
-    double deg=ddmm.substring(0,degLen).toDouble();
-    double min=ddmm.substring(degLen).toDouble();
-    return deg+min/60.0;
-  };
-  double lat=nmeaToDeg(latStr), lon=nmeaToDeg(lonStr);
+  double lat=nmeaDdmmToDeg(latStr), lon=nmeaDdmmToDeg(lonStr);
   if(ns=="S") lat=-lat;
   if(ew=="W") lon=-lon;
   latOut=lat; lonOut=lon;

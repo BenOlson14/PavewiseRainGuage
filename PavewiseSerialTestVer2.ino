@@ -580,18 +580,46 @@ static bool connectNetwork(String &iccid, String &imei, int &rssi) {
   Serial.printf("[MODEM] ICCID: %s\n", iccid.c_str());
   Serial.printf("[MODEM] IMEI : %s\n", imei.c_str());
 
-  if (!modem.waitForNetwork(60000L)) {
-    Serial.println("[NET] waitForNetwork timeout");
-    return false;
-  }
+  Serial.print("[MODEM] Modem Info: ");
+  Serial.println(modem.getModemInfo());
 
-  if (!modem.gprsConnect(APN, GPRS_USER, GPRS_PASS)) {
-    Serial.println("[NET] gprsConnect failed");
+  Serial.println("[NET] Waiting for network registration (up to 60s)...");
+  uint32_t start = millis();
+  if (!modem.waitForNetwork(60000L)) {
+    uint32_t elapsed = elapsedMs(start);
+    Serial.printf("[NET] waitForNetwork timeout (%.1f s)\n", elapsed / 1000.0f);
     return false;
   }
+  uint32_t netMs = elapsedMs(start);
+  Serial.printf("[NET] Registered in %lu ms (%.1f s)\n",
+                (unsigned long)netMs, netMs / 1000.0f);
+
+  int16_t csq = modem.getSignalQuality();
+  Serial.printf("[NET] RSSI (CSQ): %d\n", (int)csq);
+
+  String op = modem.getOperator();
+  Serial.print("[NET] Operator : ");
+  Serial.println(op.length() ? op : "(unknown)");
+
+  Serial.print("[NET] Local IP : ");
+  Serial.println(modem.localIP());
+
+  Serial.println("[NET] Connecting GPRS...");
+  start = millis();
+  if (!modem.gprsConnect(APN, GPRS_USER, GPRS_PASS)) {
+    uint32_t elapsed = elapsedMs(start);
+    Serial.printf("[NET] gprsConnect failed (%.1f s)\n", elapsed / 1000.0f);
+    return false;
+  }
+  uint32_t gprsMs = elapsedMs(start);
+  Serial.printf("[NET] GPRS OK in %lu ms (%.1f s)\n",
+                (unsigned long)gprsMs, gprsMs / 1000.0f);
 
   rssi = modem.getSignalQuality();
   Serial.printf("[NET] RSSI (CSQ): %d\n", rssi);
+
+  Serial.print("[NET] Local IP : ");
+  Serial.println(modem.localIP());
 
   return true;
 }
@@ -702,6 +730,7 @@ static bool gpsAcquire(uint32_t timeoutMs,
     return false;
   }
 
+  uint32_t lastProgress = 0;
   while (elapsedMs(start) < timeoutMs) {
     // Ask for GPS info.
     modem.sendAT("+CGPSINFO");
@@ -718,6 +747,11 @@ static bool gpsAcquire(uint32_t timeoutMs,
         fixTimeMsOut = elapsedMs(start);
         return true;
       }
+    }
+
+    if (elapsedMs(start) - lastProgress >= 5000) {
+      lastProgress = elapsedMs(start);
+      Serial.printf("[GPS] searching... t=%.1f s\n", lastProgress / 1000.0f);
     }
 
     delay(2000);

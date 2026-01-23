@@ -19,7 +19,7 @@ This file is the SAME logic as the serial tester build but:
   - Wake interval is 5 minutes for higher-frequency local logging/testing.
 ************************************************************************************/
 
-#define ENABLE_DEBUG 0
+#define ENABLE_DEBUG 1
 
 #define TINY_GSM_MODEM_SIM7600
 #define TINY_GSM_USE_GPRS true
@@ -202,12 +202,16 @@ static bool findOldestDailyLog(String &oldestPath) {
 
 // Purge logs when SD exceeds the high watermark, delete oldest until target met.
 static void purgeLogsIfNeeded() {
-  if (sdUsedPercent() < SD_PURGE_START_PCT) return;
+  float used = sdUsedPercent();
+  if (used < SD_PURGE_START_PCT) return;
+  DBG_PRINTF("[SD] %.1f%% used -> purging...\n", used);
   while (sdUsedPercent() > SD_PURGE_TARGET_PCT) {
     String oldest;
     if (!findOldestDailyLog(oldest)) break;
+    DBG_PRINTF("[SD] Deleting: %s\n", oldest.c_str());
     SD.remove(oldest.c_str());
   }
+  DBG_PRINTF("[SD] After purge: %.1f%% used\n", sdUsedPercent());
 }
 
 // Read one-line text file from SD (trimmed).
@@ -353,6 +357,7 @@ static String buildUploadPayload(const String &imei,
 }
 
 static bool modemPowerOn() {
+  DBG_PRINTLN("[MODEM] Powering ON sequence...");
   ts7600PowerPinsSetup();
 
   int st = digitalRead(MODEM_STATUS);
@@ -367,13 +372,18 @@ static bool modemPowerOn() {
   DBG_PRINTLN("[MODEM] Testing AT responsiveness (up to ~10s)...");
   uint32_t start = millis();
   while (elapsedMs(start) < 10000) {
-    if (modem.testAT()) return true;
+    if (modem.testAT()) {
+      DBG_PRINTLN("[MODEM] AT OK");
+      return true;
+    }
     delay(1000);
   }
+  DBG_PRINTLN("[MODEM] AT timeout");
   return false;
 }
 
 static void modemBestEffortPowerDown() {
+  DBG_PRINTLN("[MODEM] power down (software-only) ...");
   modem.sendAT("+CGPS=0"); modem.waitResponse(1000);
   modem.gprsDisconnect();
   modem.sendAT("+CFUN=0"); modem.waitResponse(2000);
@@ -383,11 +393,15 @@ static void modemBestEffortPowerDown() {
   pulsePwrKey(1500);
   SerialAT.end();
   digitalWrite(MODEM_FLIGHT, HIGH);
+  DBG_PRINTLN("[MODEM] power down done");
 }
 
 static bool connectNetwork(String &iccid,String &imei,int &rssi) {
   rssi=-1;
-  if(!modem.init()) return false;
+  if(!modem.init()) {
+    DBG_PRINTLN("[MODEM] modem.init failed");
+    return false;
+  }
 #if defined(TINY_GSM_MODEM_HAS_GPS)
   uint8_t gnssMode = modem.getGNSSMode();
   DBG_PRINTF("[GPS] GNSS Mode (before): %u\n", gnssMode);
@@ -397,10 +411,56 @@ static bool connectNetwork(String &iccid,String &imei,int &rssi) {
 #endif
   String tIccid=modem.getSimCCID(); if(tIccid.length()) iccid=tIccid;
   String tImei =modem.getIMEI();    if(tImei.length())  imei=tImei;
-  if(!modem.waitForNetwork(60000L)) return false;
-  if(!modem.gprsConnect(APN,GPRS_USER,GPRS_PASS)) return false;
+  DBG_PRINTF("[MODEM] ICCID: %s\n", iccid.c_str());
+  DBG_PRINTF("[MODEM] IMEI : %s\n", imei.c_str());
+  DBG_PRINT("[MODEM] Modem Info: ");
+  DBG_PRINTLN(modem.getModemInfo());
+
+  DBG_PRINTLN("[NET] Waiting for network registration (up to 60s)...");
+  uint32_t start = millis();
+  if(!modem.waitForNetwork(60000L)) {
+    uint32_t elapsed = elapsedMs(start);
+    DBG_PRINTF("[NET] waitForNetwork timeout (%.1f s)\n", elapsed / 1000.0f);
+    return false;
+  }
+  uint32_t netMs = elapsedMs(start);
+  DBG_PRINTF("[NET] Registered in %lu ms (%.1f s)\n",
+             (unsigned long)netMs, netMs / 1000.0f);
+
+  int16_t csq = modem.getSignalQuality();
+  DBG_PRINTF("[NET] RSSI (CSQ): %d\n", (int)csq);
+
+  String op = modem.getOperator();
+  DBG_PRINT("[NET] Operator : ");
+  DBG_PRINTLN(op.length() ? op : "(unknown)");
+
+  DBG_PRINT("[NET] Local IP : ");
+  DBG_PRINTLN(modem.localIP());
+
+  DBG_PRINTLN("[NET] Connecting GPRS...");
+  start = millis();
+  if(!modem.gprsConnect(APN,GPRS_USER,GPRS_PASS)) {
+    uint32_t elapsed = elapsedMs(start);
+    DBG_PRINTF("[NET] gprsConnect failed (%.1f s)\n", elapsed / 1000.0f);
+    return false;
+  }
+  uint32_t gprsMs = elapsedMs(start);
+  DBG_PRINTF("[NET] GPRS OK in %lu ms (%.1f s)\n",
+             (unsigned long)gprsMs, gprsMs / 1000.0f);
   rssi=modem.getSignalQuality();
+  DBG_PRINTF("[NET] RSSI (CSQ): %d\n", rssi);
+  DBG_PRINT("[NET] Local IP : ");
+  DBG_PRINTLN(modem.localIP());
   return true;
+}
+
+// Convert NMEA ddmm.mmmm or dddmm.mmmm into decimal degrees.
+static double nmeaDdmmToDeg(const String &ddmm) {
+  int dot = ddmm.indexOf('.');
+  int degLen = (dot >= 0 && dot > 4) ? 3 : 2;     // lon often has 3 deg digits
+  double deg = ddmm.substring(0, degLen).toDouble();
+  double min = ddmm.substring(degLen).toDouble();
+  return deg + (min / 60.0);
 }
 
 static bool parseCgpsInfo(const String &resp,double &latOut,double &lonOut,bool &hasEpoch,uint32_t &epochOut){
@@ -422,14 +482,7 @@ static bool parseCgpsInfo(const String &resp,double &latOut,double &lonOut,bool 
   String lonStr=parts[2]; lonStr.trim();
   String ew=parts[3]; ew.trim();
 
-  auto nmeaToDeg=[](const String &ddmm)->double{
-    int dot=ddmm.indexOf('.');
-    int degLen=(dot>=0&&dot>4)?3:2;
-    double deg=ddmm.substring(0,degLen).toDouble();
-    double min=ddmm.substring(degLen).toDouble();
-    return deg+min/60.0;
-  };
-  double lat=nmeaToDeg(latStr), lon=nmeaToDeg(lonStr);
+  double lat=nmeaDdmmToDeg(latStr), lon=nmeaDdmmToDeg(lonStr);
   if(ns=="S") lat=-lat;
   if(ew=="W") lon=-lon;
   latOut=lat; lonOut=lon;
@@ -469,6 +522,7 @@ static bool gpsAcquire(uint32_t timeoutMs,
     fixTimeMsOut = elapsedMs(start);
     return false;
   }
+  uint32_t lastProgress = 0;
   while(elapsedMs(start)<timeoutMs){
     modem.sendAT("+CGPSINFO");
     String out;
@@ -479,6 +533,10 @@ static bool gpsAcquire(uint32_t timeoutMs,
         fixTimeMsOut = elapsedMs(start);
         return true;
       }
+    }
+    if (elapsedMs(start) - lastProgress >= 5000) {
+      lastProgress = elapsedMs(start);
+      DBG_PRINTF("[GPS] searching... t=%.1f s\n", lastProgress / 1000.0f);
     }
     delay(2000);
   }
@@ -599,7 +657,9 @@ void setup(){
   if(g_epochEstimate>0) g_epochEstimate += WAKE_INTERVAL_SECONDS;
 
   // Mount SD (critical for logs and state). If it fails, sleep.
-  if(!initSD()){
+  bool sdOk = initSD();
+  DBG_PRINTF("[SD] init: %s\n", sdOk ? "OK" : "FAIL");
+  if(!sdOk){
     esp_sleep_enable_timer_wakeup((uint64_t)WAKE_INTERVAL_SECONDS*1000000ULL);
     DBG_FLUSH();
     esp_deep_sleep_start();
@@ -625,18 +685,24 @@ void setup(){
 
   // Initialize rainfall sensor (I2C).
   Wire.begin();
-  (void)RainSensor.begin();
+  bool rainOk = RainSensor.begin();
+  DBG_PRINTF("[RAIN] begin(): %s\n", rainOk ? "OK" : "FAIL");
 
   // Compute rainfall delta for this interval.
   float totalMm=readRainTotalMm();
   float deltaMm=rainDeltaInterval(totalMm);
+  DBG_PRINTF("[RAIN] total=%.3f mm  delta5m=%.3f mm\n", totalMm, deltaMm);
 
   uint32_t battMvRaw=0;
   float battV=readBatteryVoltage(battMvRaw);
   uint32_t battMvVBAT=(uint32_t)lroundf(battV*1000.0f);
+  DBG_PRINTF("[BATT] raw=%lu mV, scaled=%.3f V (~%lu mV)\n",
+             (unsigned long)battMvRaw, battV, (unsigned long)battMvVBAT);
 
   // If modem can't power on, still log locally and queue payload.
-  if(!modemPowerOn()){
+  bool modemOk = modemPowerOn();
+  DBG_PRINTF("[MODEM] Overall modem connect: %s\n", modemOk ? "OK" : "FAIL");
+  if(!modemOk){
     uint32_t epochNow=(g_epochEstimate>0)?g_epochEstimate:lastGpsEpoch;
     char dailyLine[256];
     snprintf(dailyLine, sizeof(dailyLine),
@@ -661,6 +727,7 @@ void setup(){
   int rssi=-1;
   bool netOk=connectNetwork(iccid,imei,rssi);
   saveIdentity(iccid,imei);
+  DBG_PRINTF("[NET] Registered: %s (RSSI=%d)\n", netOk ? "YES" : "NO", rssi);
 
   // Determine current epoch for this wake.
   uint32_t epochNow=g_epochEstimate;
@@ -683,6 +750,8 @@ void setup(){
     uint32_t fixTimeMs = 0;
     uint32_t gpsTimeoutMs = lastGpsFixMs > 0 ? (lastGpsFixMs * 2UL) : GPS_TIMEOUT_DEFAULT_MS;
 
+    DBG_PRINTF("[GPS] refresh due; attempting fix (timeout %.1f min)...\n",
+               gpsTimeoutMs / 60000.0f);
     bool gpsOk = gpsAcquire(gpsTimeoutMs, lat, lon, hasGpsEpoch, gpsEpoch, fixTimeMs);
     if (gpsOk) {
       lastLat = lat; lastLon = lon;
@@ -695,10 +764,14 @@ void setup(){
         lastGpsEpoch = gpsEpoch;
         g_epochEstimate = gpsEpoch;
         epochNow = gpsEpoch;
+        DBG_PRINTF("[GPS] FIX OK: lat=%.7f lon=%.7f epoch=%lu (%.1f s)\n",
+                   lastLat, lastLon, (unsigned long)gpsEpoch, fixTimeMs / 1000.0f);
       } else {
         if (epochNow == 0) epochNow = (uint32_t)(millis() / 1000UL);
         lastGpsEpoch = epochNow;
         if (g_epochEstimate == 0) g_epochEstimate = epochNow;
+        DBG_PRINTF("[GPS] FIX OK: lat=%.7f lon=%.7f (no epoch, %.1f s)\n",
+                   lastLat, lastLon, fixTimeMs / 1000.0f);
       }
       saveLastGps(lastGpsEpoch, lastLat, lastLon);
       gpsIncludedInUpload = true;
@@ -708,6 +781,8 @@ void setup(){
       if (baseEpoch == 0) baseEpoch = (uint32_t)(millis() / 1000UL);
       gpsRetryEpoch = baseEpoch + GPS_RETRY_SECONDS;
       writeUInt32File(FILE_GPS_RETRY_EPOCH, gpsRetryEpoch);
+      DBG_PRINTF("[GPS] FIX FAIL (retry scheduled at epoch %lu)\n",
+                 (unsigned long)gpsRetryEpoch);
     }
   } else if (needGps && !netOk) {
     uint32_t baseEpoch = epochNow;
@@ -715,6 +790,10 @@ void setup(){
     if (baseEpoch == 0) baseEpoch = (uint32_t)(millis() / 1000UL);
     gpsRetryEpoch = baseEpoch + GPS_RETRY_SECONDS;
     writeUInt32File(FILE_GPS_RETRY_EPOCH, gpsRetryEpoch);
+    DBG_PRINTF("[GPS] retry scheduled at epoch %lu (network not OK)\n",
+               (unsigned long)gpsRetryEpoch);
+  } else {
+    DBG_PRINTLN("[GPS] not due");
   }
 
   // Final fallback if we still have no epoch.
@@ -751,7 +830,15 @@ void setup(){
   writeQueueLine(qPath,payload);
 
   // HTTP intentionally disabled in this build.
-  if(netOk && ENABLE_HTTP) sendAllQueuedFiles(lastHttpMs);
+  if(netOk && ENABLE_HTTP) {
+    DBG_PRINTF("[HTTP] sending queued payloads (timeout %lu ms)...\n",
+               (unsigned long)computeHttpTimeoutMs(lastHttpMs));
+    sendAllQueuedFiles(lastHttpMs);
+  } else if (!ENABLE_HTTP) {
+    DBG_PRINTLN("[HTTP] disabled");
+  } else {
+    DBG_PRINTLN("[HTTP] skipped (network not OK)");
+  }
 
   // Housekeeping and power-down.
   purgeLogsIfNeeded();
