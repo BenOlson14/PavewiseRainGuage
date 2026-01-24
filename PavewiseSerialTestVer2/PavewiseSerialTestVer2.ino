@@ -517,11 +517,9 @@ static bool connectNetwork(String &iccid, String &imei, int &rssi) {
   }
 
 #if defined(TINY_GSM_MODEM_HAS_GPS)
-  uint8_t gnssMode = modem.getGNSSMode();
-  Serial.printf("[GPS] GNSS Mode (before): %u\n", gnssMode);
-  modem.setGNSSMode(1, 1);
+  Serial.println("[GPS] Enabling GNSS...");
+  modem.setGPSMode(1);
   delay(200);
-  Serial.printf("[GPS] GNSS Mode (after) : %u\n", modem.getGNSSMode());
 #endif
 
   String tIccid = modem.getSimCCID();
