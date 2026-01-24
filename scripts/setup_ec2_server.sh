@@ -19,8 +19,15 @@ read -rp "Postgres database name: " DB_NAME
 read -rp "Postgres username: " DB_USER
 read -rsp "Postgres password: " DB_PASS
 echo
-read -rp "Server listen port [80]: " SERVER_PORT
-SERVER_PORT=${SERVER_PORT:-80}
+read -rp "Server listen port [8080]: " SERVER_PORT
+SERVER_PORT=${SERVER_PORT:-8080}
+
+# Port 80/443 require elevated privileges (CAP_NET_BIND_SERVICE) when running as www-data.
+# Use a high, non-privileged port by default to avoid service startup failures.
+if [[ "${SERVER_PORT}" -lt 1024 ]]; then
+  echo "[WARN] Port ${SERVER_PORT} is privileged (<1024). Using 8080 instead so the service can bind as www-data."
+  SERVER_PORT=8080
+fi
 read -rp "HTTP ingest path [/ingest]: " SERVER_PATH
 SERVER_PATH=${SERVER_PATH:-/ingest}
 DEFAULT_WORKERS=$(command -v nproc >/dev/null 2>&1 && nproc || echo 2)
