@@ -776,7 +776,8 @@ void setup(){
   bool needGps = (!haveValidEpoch) ||
                  (lastGpsEpoch == 0) ||
                  (epochNow >= lastGpsEpoch && (epochNow - lastGpsEpoch) >= GPS_REFRESH_SECONDS) ||
-                 gpsRetryDue;
+                 gpsRetryDue ||
+                 (g_wakeCounter == 1);
 
   bool gpsIncludedInUpload = false;
 
