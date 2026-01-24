@@ -30,35 +30,18 @@ PUBLIC_IP=${PUBLIC_IP:-"<your-ec2-public-ip>"}
 if command -v apt-get >/dev/null 2>&1; then
   sudo apt-get update
   sudo apt-get install -y python3-venv python3-pip postgresql postgresql-contrib curl rsync
-elif command -v yum >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1; then
-  PKG_TOOL="yum"
-  if command -v dnf >/dev/null 2>&1; then
-    PKG_TOOL="dnf"
-  fi
-  sudo "${PKG_TOOL}" install -y python3 python3-pip curl rsync
-  if ! sudo "${PKG_TOOL}" install -y postgresql-server postgresql-contrib; then
-    sudo "${PKG_TOOL}" install -y postgresql15-server postgresql15-contrib
-  fi
-  if ! command -v psql >/dev/null 2>&1; then
-    if ! sudo "${PKG_TOOL}" install -y postgresql; then
-      sudo "${PKG_TOOL}" install -y postgresql15
-    fi
-  fi
-  if [[ ! -d /var/lib/pgsql/data ]]; then
-    sudo postgresql-setup --initdb
-  fi
 else
-  echo "Unsupported package manager. Please install Python, PostgreSQL, curl, and rsync manually." >&2
+  echo "Unsupported package manager. This script is intended for Ubuntu (apt-get)." >&2
   exit 1
 fi
 
 sudo systemctl enable --now postgresql
 
-sudo -u postgres psql -v db_user="${DB_USER}" -v db_pass="${DB_PASS}" -v db_name="${DB_NAME}" <<'SQL'
+sudo -u postgres psql -v ON_ERROR_STOP=1 -v db_user="${DB_USER}" -v db_pass="${DB_PASS}" -v db_name="${DB_NAME}" <<'SQL'
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'db_user') THEN
-        CREATE ROLE :"db_user" LOGIN PASSWORD :'db_pass';
+        EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L', :'db_user', :'db_pass');
     END IF;
 END
 $$;
