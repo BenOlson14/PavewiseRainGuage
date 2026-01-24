@@ -19,8 +19,8 @@ read -rp "Postgres database name: " DB_NAME
 read -rp "Postgres username: " DB_USER
 read -rsp "Postgres password: " DB_PASS
 echo
-read -rp "Server listen port [8080]: " SERVER_PORT
-SERVER_PORT=${SERVER_PORT:-8080}
+read -rp "Server listen port [80]: " SERVER_PORT
+SERVER_PORT=${SERVER_PORT:-80}
 read -rp "HTTP ingest path [/ingest]: " SERVER_PATH
 SERVER_PATH=${SERVER_PATH:-/ingest}
 DEFAULT_WORKERS=$(command -v nproc >/dev/null 2>&1 && nproc || echo 2)
@@ -55,11 +55,37 @@ fi
 
 sudo systemctl enable --now postgresql
 
+PG_CONF=$(sudo -u postgres psql -tAc "SHOW config_file;")
+PG_HBA=$(sudo -u postgres psql -tAc "SHOW hba_file;")
+
+if [[ -n "${PG_CONF}" ]]; then
+  sudo cp "${PG_CONF}" "${PG_CONF}.bak"
+  if sudo grep -q "^[#]*listen_addresses" "${PG_CONF}"; then
+    sudo sed -i "s/^[#]*listen_addresses.*/listen_addresses = '*'/g" "${PG_CONF}"
+  else
+    echo "listen_addresses = '*'" | sudo tee -a "${PG_CONF}" >/dev/null
+  fi
+fi
+
+if [[ -n "${PG_HBA}" ]]; then
+  sudo cp "${PG_HBA}" "${PG_HBA}.bak"
+  if ! sudo grep -qE "^host\\s+all\\s+all\\s+0.0.0.0/0\\s+scram-sha-256" "${PG_HBA}"; then
+    echo "host    all             all             0.0.0.0/0               scram-sha-256" | sudo tee -a "${PG_HBA}" >/dev/null
+  fi
+  if ! sudo grep -qE "^host\\s+all\\s+all\\s+::/0\\s+scram-sha-256" "${PG_HBA}"; then
+    echo "host    all             all             ::/0                    scram-sha-256" | sudo tee -a "${PG_HBA}" >/dev/null
+  fi
+fi
+
+sudo systemctl restart postgresql
+
 sudo -u postgres psql -v ON_ERROR_STOP=1 <<SQL
 DO \$\$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${DB_USER}') THEN
-        CREATE ROLE "${DB_USER}" LOGIN PASSWORD '${DB_PASS_ESC}';
+        CREATE ROLE "${DB_USER}" LOGIN PASSWORD '${DB_PASS_ESC}' CREATEDB;
+    ELSE
+        ALTER ROLE "${DB_USER}" WITH LOGIN PASSWORD '${DB_PASS_ESC}' CREATEDB;
     END IF;
 END
 \$\$;
@@ -68,6 +94,16 @@ SQL
 if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" | grep -q 1; then
   sudo -u postgres createdb -O "${DB_USER}" "${DB_NAME}"
 fi
+
+sudo -u postgres psql -v ON_ERROR_STOP=1 <<SQL
+GRANT ALL PRIVILEGES ON DATABASE "${DB_NAME}" TO "${DB_USER}";
+SQL
+
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d "${DB_NAME}" <<SQL
+GRANT ALL PRIVILEGES ON SCHEMA public TO "${DB_USER}";
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "${DB_USER}";
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "${DB_USER}";
+SQL
 
 sudo mkdir -p "${INSTALL_DIR}"
 sudo rsync -a --delete "${SERVER_SRC_DIR}/" "${APP_DIR}/"

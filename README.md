@@ -78,7 +78,7 @@ Each wake cycle (after deep sleep) runs the **entire program in `setup()`**:
 5. **Modem bring‑up** (SIM7600 power sequence)
    - FLIGHT high, DTR low, PWRKEY pulse.
    - UART start, AT responsiveness check.
-   - `modem.init()` and GNSS configuration (`setGNSSMode`).
+   - `modem.init()` and GNSS configuration (`setGPSMode`).
 
 6. **Network registration + GPRS**
    - Waits for network registration.
@@ -101,6 +101,7 @@ Each wake cycle (after deep sleep) runs the **entire program in `setup()`**:
 10. **HTTP send (if enabled)**
     - Serial + Release: sends queued payloads via HTTP.
     - No‑HTTP: explicitly disabled.
+    - Serial + Release: logs the HTTP status and any response body (e.g. `{"status":"stored"}`) so you can confirm the worker accepted the payload.
 
 11. **Shutdown + deep sleep**
     - Attempts graceful modem power‑down.
@@ -159,6 +160,17 @@ On the server:
 - `lat     = LAT / 1e7`
 - `lon     = LON / 1e7`
 
+## Server process manager (systemd auto-restart)
+
+For a production setup, use a systemd service so the worker restarts automatically if it
+dies. Example unit file is included at `server/pavewise.service` and sets `Restart=always`
+with a short delay. Adjust the paths, user, and environment file as needed for your host.
+
+### Where logs go
+- **systemd**: logs are written to journald (stdout/stderr). View with:
+  `journalctl -u pavewise --since "1 hour ago" -f`
+- **Direct run** (`python server/app.py`): logs go to your terminal stdout/stderr.
+
 ## Server setup (EC2 Linux)
 
 The device posts payloads to an HTTP endpoint. The easiest path is to run the provided
@@ -196,7 +208,7 @@ You will be prompted for:
 - Database name
 - Database username
 - Database password
-- Ingest port (default 8080)
+- Ingest port (default 80)
 - Ingest path (default `/ingest`)
 - Gunicorn worker count (default `CPU * 2 + 1`)
 - Gunicorn threads per worker (default `4`)
@@ -221,7 +233,7 @@ This file includes:
 ### 3) Open firewall rules (EC2 security group)
 
 Allow inbound traffic for:
-- **TCP 8080** (or the port you selected) for the HTTP ingest endpoint.
+- **TCP 80** (or the port you selected) for the HTTP ingest endpoint.
 - **TCP 5432** for PostgreSQL (DB Beaver access).
 
 ### 4) Configure `utilities.h`
@@ -230,7 +242,7 @@ Use the values in `connection_details.txt` to update:
 
 ```cpp
 #define PAVEWISE_SERVER_HOST "<public-ip>"
-#define PAVEWISE_SERVER_PORT 8080
+  #define PAVEWISE_SERVER_PORT 80
 #define PAVEWISE_SERVER_PATH "/ingest"
 ```
 

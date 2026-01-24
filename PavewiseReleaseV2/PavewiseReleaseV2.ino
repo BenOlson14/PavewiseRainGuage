@@ -368,11 +368,9 @@ static bool connectNetwork(String &iccid,String &imei,int &rssi) {
   rssi=-1;
   if(!modem.init()) return false;
 #if defined(TINY_GSM_MODEM_HAS_GPS)
-  uint8_t gnssMode = modem.getGNSSMode();
-  DBG_PRINTF("[GPS] GNSS Mode (before): %u\n", gnssMode);
-  modem.setGNSSMode(1, 1);
+  DBG_PRINTLN("[GPS] Enabling GNSS...");
+  modem.setGPSMode(1);
   delay(200);
-  DBG_PRINTF("[GPS] GNSS Mode (after) : %u\n", modem.getGNSSMode());
 #endif
   String tIccid=modem.getSimCCID(); if(tIccid.length()) iccid=tIccid;
   String tImei =modem.getIMEI();    if(tImei.length())  imei=tImei;
@@ -494,7 +492,7 @@ static void writeQueueLine(const String &path,const String &line){
 }
 
 // Send HTTP payload and measure time spent (used to adapt next timeout).
-static bool httpPostPayload(const String &line, uint32_t timeoutMs, uint32_t &durationMs, int &statusOut){
+static bool httpPostPayload(const String &line, uint32_t timeoutMs, uint32_t &durationMs, int &statusOut, String &responseOut){
   http.setHttpResponseTimeout(timeoutMs);
   uint32_t start = millis();
   http.connectionKeepAlive();
@@ -506,7 +504,7 @@ static bool httpPostPayload(const String &line, uint32_t timeoutMs, uint32_t &du
   http.print(line);
   http.endRequest();
   statusOut = http.responseStatusCode();
-  (void)http.responseBody();
+  responseOut = http.responseBody();
   durationMs = elapsedMs(start);
   if (durationMs > timeoutMs) return false;
   return (statusOut>=200 && statusOut<300);
@@ -526,7 +524,11 @@ static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &dura
   String line=f.readStringUntil('\n');
   f.close();
   int status=0;
-  bool ok=httpPostPayload(line, timeoutMs, durationMs, status);
+  String response;
+  bool ok=httpPostPayload(line, timeoutMs, durationMs, status, response);
+  if (response.length() > 0) {
+    Serial.printf("[HTTP] response=%s\n", response.c_str());
+  }
   if(ok) SD.remove(path.c_str());
   return ok;
 }
