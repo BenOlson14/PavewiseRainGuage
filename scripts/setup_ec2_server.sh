@@ -19,8 +19,8 @@ read -rp "Postgres database name: " DB_NAME
 read -rp "Postgres username: " DB_USER
 read -rsp "Postgres password: " DB_PASS
 echo
-read -rp "Server listen port [8080]: " SERVER_PORT
-SERVER_PORT=${SERVER_PORT:-8080}
+read -rp "Server listen port [80]: " SERVER_PORT
+SERVER_PORT=${SERVER_PORT:-80}
 read -rp "HTTP ingest path [/ingest]: " SERVER_PATH
 SERVER_PATH=${SERVER_PATH:-/ingest}
 DEFAULT_WORKERS=$(command -v nproc >/dev/null 2>&1 && nproc || echo 2)

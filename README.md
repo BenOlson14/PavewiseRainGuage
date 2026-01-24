@@ -208,7 +208,7 @@ You will be prompted for:
 - Database name
 - Database username
 - Database password
-- Ingest port (default 8080)
+- Ingest port (default 80)
 - Ingest path (default `/ingest`)
 - Gunicorn worker count (default `CPU * 2 + 1`)
 - Gunicorn threads per worker (default `4`)
@@ -233,7 +233,7 @@ This file includes:
 ### 3) Open firewall rules (EC2 security group)
 
 Allow inbound traffic for:
-- **TCP 8080** (or the port you selected) for the HTTP ingest endpoint.
+- **TCP 80** (or the port you selected) for the HTTP ingest endpoint.
 - **TCP 5432** for PostgreSQL (DB Beaver access).
 
 ### 4) Configure `utilities.h`
@@ -242,7 +242,7 @@ Use the values in `connection_details.txt` to update:
 
 ```cpp
 #define PAVEWISE_SERVER_HOST "<public-ip>"
-#define PAVEWISE_SERVER_PORT 8080
+  #define PAVEWISE_SERVER_PORT 80
 #define PAVEWISE_SERVER_PATH "/ingest"
 ```
 
