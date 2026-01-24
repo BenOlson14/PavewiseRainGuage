@@ -491,9 +491,16 @@ static void writeQueueLine(const String &path,const String &line){
   f.close();
 }
 
+static String ensureQueuePath(const String &name){
+  if(name.startsWith("/")) return name;
+  return String(DIR_QUEUE)+"/"+name;
+}
+
 // Send HTTP payload and measure time spent (used to adapt next timeout).
 static bool httpPostPayload(const String &line, uint32_t timeoutMs, uint32_t &durationMs, int &statusOut, String &responseOut){
   http.setHttpResponseTimeout(timeoutMs);
+  Serial.printf("[HTTP] Attempting POST http://%s:%d%s\n", SERVER_HOST, SERVER_PORT, SERVER_PATH);
+  Serial.printf("[HTTP] Payload length: %u bytes\n", (unsigned)line.length());
   uint32_t start = millis();
   http.connectionKeepAlive();
   http.beginRequest();
@@ -502,10 +509,12 @@ static bool httpPostPayload(const String &line, uint32_t timeoutMs, uint32_t &du
   http.sendHeader("Content-Length", line.length());
   http.beginBody();
   http.print(line);
+  Serial.println("[HTTP] Payload sent, awaiting response...");
   http.endRequest();
   statusOut = http.responseStatusCode();
   responseOut = http.responseBody();
   durationMs = elapsedMs(start);
+  http.stop();
   if (durationMs > timeoutMs) return false;
   return (statusOut>=200 && statusOut<300);
 }
@@ -520,14 +529,24 @@ static uint32_t computeHttpTimeoutMs(uint32_t lastHttpMs) {
 // Send a single queued file (delete only on success).
 static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &durationMs){
   File f=SD.open(path, FILE_READ);
-  if(!f) return false;
+  if(!f){
+    Serial.printf("[QUEUE] FAILED to open %s\n", path.c_str());
+    return false;
+  }
   String line=f.readStringUntil('\n');
+  size_t fileSize=f.size();
   f.close();
   int status=0;
   String response;
+  Serial.printf("[QUEUE] sending %s (%u bytes on disk)\n", path.c_str(), (unsigned)fileSize);
   bool ok=httpPostPayload(line, timeoutMs, durationMs, status, response);
   if (response.length() > 0) {
     Serial.printf("[HTTP] response=%s\n", response.c_str());
+    if (response.indexOf("stored") >= 0) {
+      Serial.println("[HTTP] Server response indicates: stored");
+    }
+  } else {
+    Serial.println("[HTTP] response empty");
   }
   if(ok) SD.remove(path.c_str());
   return ok;
@@ -541,10 +560,11 @@ static void sendAllQueuedFiles(uint32_t &lastHttpMs){
   while(true){
     File f=dir.openNextFile();
     if(!f) break;
-    if(!f.isDirectory()) files.push_back(String(f.name()));
+    if(!f.isDirectory()) files.push_back(ensureQueuePath(String(f.name())));
     f.close();
   }
   dir.close();
+  Serial.printf("[QUEUE] %u payload(s) queued\n", (unsigned)files.size());
   std::sort(files.begin(),files.end(),[](const String&a,const String&b){return a<b;});
   uint32_t timeoutMs = computeHttpTimeoutMs(lastHttpMs);
   for(auto &p:files){
