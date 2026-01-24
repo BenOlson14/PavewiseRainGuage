@@ -120,6 +120,13 @@ static const char SERVER_PATH[] = "/ingest";       // TODO
 #define MODEM_FLIGHT  25
 #define MODEM_STATUS  34
 
+// LILYGO SIM7600 reference timings:
+// MODEM_POWERON_PULSE_WIDTH_MS = 500, MODEM_START_WAIT_MS = 15000.
+static const uint32_t MODEM_PWRKEY_PREP_MS  = 100;
+static const uint32_t MODEM_PWRKEY_PULSE_MS = 500;
+static const uint32_t MODEM_BOOT_WAIT_MS    = 15000;
+static const uint32_t MODEM_POWEROFF_PULSE_MS = 3000;
+
 // Battery ADC pin (typical on LilyGO)
 #define BAT_ADC_PIN   35
 
@@ -172,6 +179,16 @@ static uint32_t elapsedMs(uint32_t startMs) {
   return (uint32_t)(millis() - startMs);
 }
 
+// Poll AT until timeout; returns true on first successful response.
+static bool waitForAtResponsive(uint32_t timeoutMs) {
+  uint32_t start = millis();
+  while (elapsedMs(start) < timeoutMs) {
+    if (modem.testAT()) return true;
+    delay(1000);
+  }
+  return false;
+}
+
 // Turn off radios we do not use (WiFi/BT).
 static void disableRadiosForPower() {
   WiFi.mode(WIFI_OFF);
@@ -195,13 +212,15 @@ static void ts7600PowerPinsSetup() {
   digitalWrite(MODEM_FLIGHT, HIGH);
   digitalWrite(MODEM_DTR, LOW);
 
+  digitalWrite(MODEM_PWRKEY, LOW);
+  delay(MODEM_PWRKEY_PREP_MS);
   digitalWrite(MODEM_PWRKEY, HIGH);
-  delay(300);
+  delay(MODEM_PWRKEY_PULSE_MS);
   digitalWrite(MODEM_PWRKEY, LOW);
 }
 
 // Helper to pulse PWRKEY when forcing power-down.
-static void pulsePwrKey(uint32_t holdMs = 1500) {
+static void pulsePwrKey(uint32_t holdMs = MODEM_POWEROFF_PULSE_MS) {
   pinMode(MODEM_PWRKEY, OUTPUT);
   digitalWrite(MODEM_PWRKEY, HIGH);
   delay(holdMs);
@@ -500,21 +519,37 @@ static bool modemPowerOn() {
   int st = digitalRead(MODEM_STATUS);
   Serial.printf("[MODEM] MODEM_STATUS after PWRKEY kick: %d (may be unwired)\n", st);
 
-  Serial.println("[MODEM] Waiting ~5s for modem boot...");
-  delay(5000);
+  Serial.println("[MODEM] Waiting ~15s for modem boot...");
+  delay(MODEM_BOOT_WAIT_MS);
 
   Serial.println("[MODEM] Starting UART...");
   SerialAT.begin(UART_BAUD, SERIAL_8N1, MODEM_RX, MODEM_TX);
   delay(200);
 
   Serial.println("[MODEM] Testing AT responsiveness (up to ~10s)...");
-  uint32_t start = millis();
-  while (elapsedMs(start) < 10000) {
-    if (modem.testAT()) {
-      Serial.println("[MODEM] AT OK");
-      return true;
-    }
-    delay(1000);
+  if (waitForAtResponsive(10000)) {
+    Serial.println("[MODEM] AT OK");
+    return true;
+  }
+
+  Serial.println("[MODEM] AT timeout, retrying power cycle...");
+
+  // Force modem OFF, then ON again, to avoid a stuck power state.
+  pulsePwrKey();
+  delay(1000);
+  digitalWrite(MODEM_PWRKEY, LOW);
+  delay(MODEM_PWRKEY_PREP_MS);
+  digitalWrite(MODEM_PWRKEY, HIGH);
+  delay(MODEM_PWRKEY_PULSE_MS);
+  digitalWrite(MODEM_PWRKEY, LOW);
+
+  Serial.println("[MODEM] Waiting ~15s for modem boot (retry)...");
+  delay(MODEM_BOOT_WAIT_MS);
+
+  Serial.println("[MODEM] Testing AT responsiveness (retry, up to ~10s)...");
+  if (waitForAtResponsive(10000)) {
+    Serial.println("[MODEM] AT OK (retry)");
+    return true;
   }
 
   Serial.println("[MODEM] AT timeout");
@@ -543,7 +578,7 @@ static void modemBestEffortPowerDown() {
   digitalWrite(MODEM_DTR, HIGH);
 
   // Extra PWRKEY pulse to force shutdown.
-  pulsePwrKey(1500);
+  pulsePwrKey();
 
   // Stop UART to avoid phantom powering.
   SerialAT.end();

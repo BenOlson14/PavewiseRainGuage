@@ -76,6 +76,14 @@ static const float SD_PURGE_TARGET_PCT = 70.0f;
 #define MODEM_RI      33
 #define MODEM_FLIGHT  25
 #define MODEM_STATUS  34
+
+// LILYGO SIM7600 reference timings:
+// MODEM_POWERON_PULSE_WIDTH_MS = 500, MODEM_START_WAIT_MS = 15000.
+static const uint32_t MODEM_PWRKEY_PREP_MS  = 100;
+static const uint32_t MODEM_PWRKEY_PULSE_MS = 500;
+static const uint32_t MODEM_BOOT_WAIT_MS    = 15000;
+static const uint32_t MODEM_POWEROFF_PULSE_MS = 3000;
+
 #define BAT_ADC_PIN   35
 #define SD_MISO       2
 #define SD_MOSI       15
@@ -119,6 +127,16 @@ DFRobot_RainfallSensor_I2C RainSensor(&Wire);
 
 static uint32_t elapsedMs(uint32_t startMs){ return (uint32_t)(millis() - startMs); }
 
+// Poll AT until timeout; returns true on first successful response.
+static bool waitForAtResponsive(uint32_t timeoutMs) {
+  uint32_t start = millis();
+  while (elapsedMs(start) < timeoutMs) {
+    if (modem.testAT()) return true;
+    delay(1000);
+  }
+  return false;
+}
+
 static void disableRadiosForPower() {
   WiFi.mode(WIFI_OFF);
   btStop();
@@ -137,13 +155,15 @@ static void ts7600PowerPinsSetup() {
   digitalWrite(MODEM_FLIGHT, HIGH);
   digitalWrite(MODEM_DTR, LOW);
 
+  digitalWrite(MODEM_PWRKEY, LOW);
+  delay(MODEM_PWRKEY_PREP_MS);
   digitalWrite(MODEM_PWRKEY, HIGH);
-  delay(300);
+  delay(MODEM_PWRKEY_PULSE_MS);
   digitalWrite(MODEM_PWRKEY, LOW);
 }
 
 // Helper to pulse PWRKEY when forcing power-down.
-static void pulsePwrKey(uint32_t holdMs = 1500) {
+static void pulsePwrKey(uint32_t holdMs = MODEM_POWEROFF_PULSE_MS) {
   pinMode(MODEM_PWRKEY, OUTPUT);
   digitalWrite(MODEM_PWRKEY, HIGH);
   delay(holdMs);
@@ -362,22 +382,39 @@ static bool modemPowerOn() {
 
   int st = digitalRead(MODEM_STATUS);
   DBG_PRINTF("[MODEM] MODEM_STATUS after PWRKEY kick: %d (may be unwired)\n", st);
-  DBG_PRINTLN("[MODEM] Waiting ~5s for modem boot...");
-  delay(5000);
+  DBG_PRINTLN("[MODEM] Waiting ~15s for modem boot...");
+  delay(MODEM_BOOT_WAIT_MS);
 
   DBG_PRINTLN("[MODEM] Starting UART...");
   SerialAT.begin(UART_BAUD, SERIAL_8N1, MODEM_RX, MODEM_TX);
   delay(200);
 
   DBG_PRINTLN("[MODEM] Testing AT responsiveness (up to ~10s)...");
-  uint32_t start = millis();
-  while (elapsedMs(start) < 10000) {
-    if (modem.testAT()) {
-      DBG_PRINTLN("[MODEM] AT OK");
-      return true;
-    }
-    delay(1000);
+  if (waitForAtResponsive(10000)) {
+    DBG_PRINTLN("[MODEM] AT OK");
+    return true;
   }
+
+  DBG_PRINTLN("[MODEM] AT timeout, retrying power cycle...");
+
+  // Force modem OFF, then ON again, to avoid a stuck power state.
+  pulsePwrKey();
+  delay(1000);
+  digitalWrite(MODEM_PWRKEY, LOW);
+  delay(MODEM_PWRKEY_PREP_MS);
+  digitalWrite(MODEM_PWRKEY, HIGH);
+  delay(MODEM_PWRKEY_PULSE_MS);
+  digitalWrite(MODEM_PWRKEY, LOW);
+
+  DBG_PRINTLN("[MODEM] Waiting ~15s for modem boot (retry)...");
+  delay(MODEM_BOOT_WAIT_MS);
+
+  DBG_PRINTLN("[MODEM] Testing AT responsiveness (retry, up to ~10s)...");
+  if (waitForAtResponsive(10000)) {
+    DBG_PRINTLN("[MODEM] AT OK (retry)");
+    return true;
+  }
+
   DBG_PRINTLN("[MODEM] AT timeout");
   return false;
 }
@@ -390,7 +427,7 @@ static void modemBestEffortPowerDown() {
   modem.sendAT("+CPOF");   modem.waitResponse(3000);
   modem.sendAT("+CSCLK=2"); modem.waitResponse(1000);
   digitalWrite(MODEM_DTR, HIGH);
-  pulsePwrKey(1500);
+  pulsePwrKey();
   SerialAT.end();
   digitalWrite(MODEM_FLIGHT, HIGH);
   DBG_PRINTLN("[MODEM] power down done");
@@ -825,6 +862,8 @@ void setup(){
   // Build compact payload for local queue storage.
   String payload = buildUploadPayload(imei, battMvVBAT, deltaMm, epochNow,
                                       gpsIncludedInUpload, lastLat, lastLon);
+  DBG_PRINTLN("[PAYLOAD] built:");
+  DBG_PRINTLN(payload);
 
   String qPath=makeQueueFilename(epochNow?epochNow:g_wakeCounter,g_wakeCounter);
   writeQueueLine(qPath,payload);
@@ -844,6 +883,7 @@ void setup(){
   purgeLogsIfNeeded();
   modemBestEffortPowerDown();
 
+  DBG_PRINTLN("[SLEEP] entering deep sleep...");
   esp_sleep_enable_timer_wakeup((uint64_t)WAKE_INTERVAL_SECONDS*1000000ULL);
   DBG_FLUSH();
   esp_deep_sleep_start();
