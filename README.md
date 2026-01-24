@@ -78,7 +78,7 @@ Each wake cycle (after deep sleep) runs the **entire program in `setup()`**:
 5. **Modem bring‑up** (SIM7600 power sequence)
    - FLIGHT high, DTR low, PWRKEY pulse.
    - UART start, AT responsiveness check.
-   - `modem.init()` and GNSS configuration (`setGNSSMode`).
+   - `modem.init()` and GNSS configuration (`setGPSMode`).
 
 6. **Network registration + GPRS**
    - Waits for network registration.
