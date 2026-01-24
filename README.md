@@ -198,6 +198,14 @@ You will be prompted for:
 - Database password
 - Ingest port (default 8080)
 - Ingest path (default `/ingest`)
+- Gunicorn worker count (default `CPU * 2 + 1`)
+- Gunicorn threads per worker (default `4`)
+
+**Worker sizing guidance**
+- Each Gunicorn **worker** runs a separate Python process. More workers allow more concurrent device requests.
+- Each worker can also run multiple **threads**. Threads are useful for I/O-bound work like HTTP + database calls.
+- Defaults are chosen to be safe on small EC2 instances; you can raise workers/threads if CPU and memory allow it.
+- If you change these later, rerun the setup script to regenerate the systemd service.
 
 At the end, the script prints and saves a file at:
 

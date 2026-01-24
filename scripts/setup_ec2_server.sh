@@ -23,6 +23,12 @@ read -rp "Server listen port [8080]: " SERVER_PORT
 SERVER_PORT=${SERVER_PORT:-8080}
 read -rp "HTTP ingest path [/ingest]: " SERVER_PATH
 SERVER_PATH=${SERVER_PATH:-/ingest}
+DEFAULT_WORKERS=$(command -v nproc >/dev/null 2>&1 && nproc || echo 2)
+DEFAULT_WORKERS=$((DEFAULT_WORKERS * 2 + 1))
+read -rp "Gunicorn worker count [${DEFAULT_WORKERS}]: " GUNICORN_WORKERS
+GUNICORN_WORKERS=${GUNICORN_WORKERS:-${DEFAULT_WORKERS}}
+read -rp "Gunicorn threads per worker [4]: " GUNICORN_THREADS
+GUNICORN_THREADS=${GUNICORN_THREADS:-4}
 
 if [[ ! "${DB_NAME}" =~ ^[A-Za-z0-9_]+$ ]]; then
   echo "Database name must contain only letters, numbers, or underscores." >&2
@@ -50,22 +56,18 @@ fi
 sudo systemctl enable --now postgresql
 
 sudo -u postgres psql -v ON_ERROR_STOP=1 <<SQL
-DO $$
+DO \$\$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${DB_USER}') THEN
         CREATE ROLE "${DB_USER}" LOGIN PASSWORD '${DB_PASS_ESC}';
     END IF;
 END
-$$;
-
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT FROM pg_database WHERE datname = '${DB_NAME}') THEN
-        CREATE DATABASE "${DB_NAME}" OWNER "${DB_USER}";
-    END IF;
-END
-$$;
+\$\$;
 SQL
+
+if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" | grep -q 1; then
+  sudo -u postgres createdb -O "${DB_USER}" "${DB_NAME}"
+fi
 
 sudo mkdir -p "${INSTALL_DIR}"
 sudo rsync -a --delete "${SERVER_SRC_DIR}/" "${APP_DIR}/"
@@ -84,6 +86,8 @@ PAVEWISE_DB_USER=${DB_USER}
 PAVEWISE_DB_PASSWORD=${DB_PASS}
 PAVEWISE_PORT=${SERVER_PORT}
 PAVEWISE_PATH=${SERVER_PATH}
+PAVEWISE_GUNICORN_WORKERS=${GUNICORN_WORKERS}
+PAVEWISE_GUNICORN_THREADS=${GUNICORN_THREADS}
 ENV
 
 sudo chown -R www-data:www-data "${INSTALL_DIR}"
@@ -101,7 +105,7 @@ User=www-data
 Group=www-data
 EnvironmentFile=${ENV_FILE}
 WorkingDirectory=${APP_DIR}
-ExecStart=${INSTALL_DIR}/venv/bin/gunicorn --bind 0.0.0.0:${SERVER_PORT} app:app
+ExecStart=${INSTALL_DIR}/venv/bin/gunicorn --bind 0.0.0.0:${SERVER_PORT} --worker-class gthread --workers ${GUNICORN_WORKERS} --threads ${GUNICORN_THREADS} app:app
 Restart=on-failure
 RestartSec=2
 
