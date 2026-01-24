@@ -168,17 +168,40 @@ and writes a connection details file you can use in DB Beaver and `utilities.h`.
 
 ### 1) Clone the repo on your EC2 instance
 
+**Amazon Linux (yum)**
+
 ```bash
 sudo yum install -y git
 git clone <this-repo-url>
 cd PavewiseRainGuage
 ```
 
+**Ubuntu (apt)**
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git
+git clone <this-repo-url>
+cd PavewiseRainGuage
+```
+
 **If you cannot use git:** download a zip from GitHub (Code → Download ZIP), copy it to the
-instance, and unzip it. On Amazon Linux:
+instance, and unzip it.
+
+**Amazon Linux (yum)**
 
 ```bash
 sudo yum install -y unzip curl
+curl -L -o pavewise.zip <zip-download-url>
+unzip pavewise.zip
+cd <unzipped-folder>
+```
+
+**Ubuntu (apt)**
+
+```bash
+sudo apt-get update
+sudo apt-get install -y unzip curl
 curl -L -o pavewise.zip <zip-download-url>
 unzip pavewise.zip
 cd <unzipped-folder>

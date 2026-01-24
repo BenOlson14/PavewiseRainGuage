@@ -30,10 +30,19 @@ PUBLIC_IP=${PUBLIC_IP:-"<your-ec2-public-ip>"}
 if command -v apt-get >/dev/null 2>&1; then
   sudo apt-get update
   sudo apt-get install -y python3-venv python3-pip postgresql postgresql-contrib curl rsync
-elif command -v yum >/dev/null 2>&1; then
-  sudo yum install -y python3 python3-pip postgresql-server postgresql-contrib curl rsync
+elif command -v yum >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1; then
+  PKG_TOOL="yum"
+  if command -v dnf >/dev/null 2>&1; then
+    PKG_TOOL="dnf"
+  fi
+  sudo "${PKG_TOOL}" install -y python3 python3-pip curl rsync
+  if ! sudo "${PKG_TOOL}" install -y postgresql-server postgresql-contrib; then
+    sudo "${PKG_TOOL}" install -y postgresql15-server postgresql15-contrib
+  fi
   if ! command -v psql >/dev/null 2>&1; then
-    sudo yum install -y postgresql
+    if ! sudo "${PKG_TOOL}" install -y postgresql; then
+      sudo "${PKG_TOOL}" install -y postgresql15
+    fi
   fi
   if [[ ! -d /var/lib/pgsql/data ]]; then
     sudo postgresql-setup --initdb
