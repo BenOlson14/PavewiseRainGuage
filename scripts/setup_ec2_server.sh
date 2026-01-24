@@ -63,15 +63,11 @@ BEGIN
     END IF;
 END
 \$\$;
-
-DO \$\$
-BEGIN
-    IF NOT EXISTS (SELECT FROM pg_database WHERE datname = '${DB_NAME}') THEN
-        CREATE DATABASE "${DB_NAME}" OWNER "${DB_USER}";
-    END IF;
-END
-\$\$;
 SQL
+
+if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" | grep -q 1; then
+  sudo -u postgres createdb -O "${DB_USER}" "${DB_NAME}"
+fi
 
 sudo mkdir -p "${INSTALL_DIR}"
 sudo rsync -a --delete "${SERVER_SRC_DIR}/" "${APP_DIR}/"
