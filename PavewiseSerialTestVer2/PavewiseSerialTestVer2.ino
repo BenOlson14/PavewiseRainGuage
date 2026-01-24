@@ -756,7 +756,7 @@ static uint32_t computeHttpTimeoutMs(uint32_t lastHttpMs) {
 }
 
 // Send HTTP payload and measure time spent (used to adapt next timeout).
-static bool httpPostPayload(const String &line, uint32_t timeoutMs, uint32_t &durationMs, int &statusOut) {
+static bool httpPostPayload(const String &line, uint32_t timeoutMs, uint32_t &durationMs, int &statusOut, String &responseOut) {
   http.setHttpResponseTimeout(timeoutMs);
   uint32_t start = millis();
   http.connectionKeepAlive();
@@ -768,7 +768,7 @@ static bool httpPostPayload(const String &line, uint32_t timeoutMs, uint32_t &du
   http.print(line);
   http.endRequest();
   statusOut = http.responseStatusCode();
-  (void)http.responseBody();
+  responseOut = http.responseBody();
   durationMs = elapsedMs(start);
   if (durationMs > timeoutMs) return false;
   return (statusOut >= 200 && statusOut < 300);
@@ -781,11 +781,16 @@ static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &dura
   String line = f.readStringUntil('\n');
   f.close();
   int status = 0;
-  bool ok = httpPostPayload(line, timeoutMs, durationMs, status);
+  String response;
+  bool ok = httpPostPayload(line, timeoutMs, durationMs, status, response);
   Serial.printf("[HTTP] %s status=%d duration=%lu ms timeout=%lu ms\n",
-                ok ? "OK" : "FAIL", status,
+                ok ? "OK" : "FAIL",
+                status,
                 (unsigned long)durationMs,
                 (unsigned long)timeoutMs);
+  if (response.length() > 0) {
+    Serial.printf("[HTTP] response=%s\n", response.c_str());
+  }
   if (ok) SD.remove(path.c_str());
   return ok;
 }

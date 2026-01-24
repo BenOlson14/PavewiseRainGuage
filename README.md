@@ -101,6 +101,7 @@ Each wake cycle (after deep sleep) runs the **entire program in `setup()`**:
 10. **HTTP send (if enabled)**
     - Serial + Release: sends queued payloads via HTTP.
     - No‑HTTP: explicitly disabled.
+    - Serial + Release: logs the HTTP status and any response body (e.g. `{"status":"stored"}`) so you can confirm the worker accepted the payload.
 
 11. **Shutdown + deep sleep**
     - Attempts graceful modem power‑down.
