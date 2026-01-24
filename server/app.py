@@ -1,4 +1,7 @@
+import logging
 import os
+import threading
+import time
 from datetime import datetime, timezone
 
 import psycopg2
@@ -58,8 +61,32 @@ def parse_payload(raw_payload: str) -> dict:
     }
 
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+
 app = Flask(__name__)
 PAVEWISE_PATH = os.getenv("PAVEWISE_PATH", "/ingest")
+PAVEWISE_HEARTBEAT_SECONDS = int(os.getenv("PAVEWISE_HEARTBEAT_SECONDS", "900"))
+
+
+def _start_worker_heartbeat(interval_seconds: int) -> None:
+    if interval_seconds <= 0:
+        app.logger.info("worker_heartbeat disabled interval_s=%s", interval_seconds)
+        return
+
+    def _run() -> None:
+        app.logger.info("worker_heartbeat started interval_s=%s", interval_seconds)
+        while True:
+            time.sleep(interval_seconds)
+            app.logger.info("worker_heartbeat alive interval_s=%s", interval_seconds)
+
+    thread = threading.Thread(target=_run, daemon=True, name="worker-heartbeat")
+    thread.start()
+
+
+_start_worker_heartbeat(PAVEWISE_HEARTBEAT_SECONDS)
 
 
 @app.get("/health")
@@ -72,12 +99,17 @@ def ingest():
     payload = request.get_data(as_text=True) or ""
     payload = payload.strip()
     if not payload:
+        app.logger.warning("ingest_empty_payload")
         return jsonify({"error": "Empty payload"}), 400
 
     try:
         parsed = parse_payload(payload)
     except ValueError as exc:
+        app.logger.warning("ingest_parse_error payload=%s error=%s", payload, exc)
         return jsonify({"error": str(exc)}), 400
+
+    app.logger.info("ingest_request payload=%s", payload)
+    app.logger.info("ingest_parsed payload=%s parsed=%s", payload, parsed)
 
     insert_sql = """
         INSERT INTO rain_gauge_readings (
@@ -96,10 +128,16 @@ def ingest():
                 %(epoch_seconds)s, %(epoch_utc)s, %(lat_deg)s, %(lon_deg)s, %(has_gps)s)
     """
 
-    with get_db_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(insert_sql, parsed)
+    try:
+        app.logger.info("db_insert_attempt payload=%s", payload)
+        with get_db_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(insert_sql, parsed)
+    except Exception as exc:
+        app.logger.exception("db_insert_error payload=%s error=%s", payload, exc)
+        return jsonify({"error": "Database insert failed"}), 500
 
+    app.logger.info("db_insert_success payload=%s", payload)
     return jsonify({"status": "stored"})
 
 

@@ -380,11 +380,9 @@ static bool connectNetwork(String &iccid,String &imei,int &rssi) {
     return false;
   }
 #if defined(TINY_GSM_MODEM_HAS_GPS)
-  uint8_t gnssMode = modem.getGNSSMode();
-  DBG_PRINTF("[GPS] GNSS Mode (before): %u\n", gnssMode);
-  modem.setGNSSMode(1, 1);
+  DBG_PRINTLN("[GPS] Enabling GNSS...");
+  modem.setGPSMode(1);
   delay(200);
-  DBG_PRINTF("[GPS] GNSS Mode (after) : %u\n", modem.getGNSSMode());
 #endif
   String tIccid=modem.getSimCCID(); if(tIccid.length()) iccid=tIccid;
   String tImei =modem.getIMEI();    if(tImei.length())  imei=tImei;

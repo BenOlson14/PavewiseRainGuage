@@ -78,7 +78,7 @@ Each wake cycle (after deep sleep) runs the **entire program in `setup()`**:
 5. **Modem bring‑up** (SIM7600 power sequence)
    - FLIGHT high, DTR low, PWRKEY pulse.
    - UART start, AT responsiveness check.
-   - `modem.init()` and GNSS configuration (`setGNSSMode`).
+   - `modem.init()` and GNSS configuration (`setGPSMode`).
 
 6. **Network registration + GPRS**
    - Waits for network registration.
@@ -101,6 +101,7 @@ Each wake cycle (after deep sleep) runs the **entire program in `setup()`**:
 10. **HTTP send (if enabled)**
     - Serial + Release: sends queued payloads via HTTP.
     - No‑HTTP: explicitly disabled.
+    - Serial + Release: logs the HTTP status and any response body (e.g. `{"status":"stored"}`) so you can confirm the worker accepted the payload.
 
 11. **Shutdown + deep sleep**
     - Attempts graceful modem power‑down.
@@ -158,6 +159,17 @@ On the server:
 - `batt_v  = BATT_MV / 1000.0`
 - `lat     = LAT / 1e7`
 - `lon     = LON / 1e7`
+
+## Server process manager (systemd auto-restart)
+
+For a production setup, use a systemd service so the worker restarts automatically if it
+dies. Example unit file is included at `server/pavewise.service` and sets `Restart=always`
+with a short delay. Adjust the paths, user, and environment file as needed for your host.
+
+### Where logs go
+- **systemd**: logs are written to journald (stdout/stderr). View with:
+  `journalctl -u pavewise --since "1 hour ago" -f`
+- **Direct run** (`python server/app.py`): logs go to your terminal stdout/stderr.
 
 ## Server setup (EC2 Linux)
 
