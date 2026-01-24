@@ -66,6 +66,8 @@ HttpClient http(gsm, SERVER_HOST, SERVER_PORT);
 
 DFRobot_RainfallSensor_I2C RainSensor(&Wire);
 
+static const uint32_t HTTP_QUEUE_SEND_DELAY_MS = 1000;
+
 static uint32_t elapsedMs(uint32_t startMs){ return (uint32_t)(millis() - startMs); }
 
 // Poll AT until timeout; returns true on first successful response.
@@ -502,7 +504,6 @@ static bool httpPostPayload(const String &line, uint32_t timeoutMs, uint32_t &du
   Serial.printf("[HTTP] Attempting POST http://%s:%d%s\n", SERVER_HOST, SERVER_PORT, SERVER_PATH);
   Serial.printf("[HTTP] Payload length: %u bytes\n", (unsigned)line.length());
   uint32_t start = millis();
-  http.connectionKeepAlive();
   http.beginRequest();
   http.post(SERVER_PATH);
   http.sendHeader("Content-Type","text/plain");
@@ -579,6 +580,7 @@ static void sendAllQueuedFiles(uint32_t &lastHttpMs){
     }
     lastHttpMs = durationMs;
     writeUInt32File(FILE_HTTP_LAST_MS, lastHttpMs);
+    delay(HTTP_QUEUE_SEND_DELAY_MS);
   }
 }
 
