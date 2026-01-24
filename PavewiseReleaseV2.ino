@@ -606,6 +606,7 @@ static void sendAllQueuedFiles(uint32_t &lastHttpMs){
   }
   dir.close();
   std::sort(files.begin(),files.end(),[](const String&a,const String&b){return a<b;});
+  uint32_t timeoutMs = computeHttpTimeoutMs(lastHttpMs);
   for(auto &p:files){
     uint32_t timeoutMs = computeHttpTimeoutMs(lastHttpMs);
     uint32_t durationMs = 0;
