@@ -56,21 +56,21 @@ fi
 sudo systemctl enable --now postgresql
 
 sudo -u postgres psql -v ON_ERROR_STOP=1 <<SQL
-DO $$
+DO \$\$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${DB_USER}') THEN
         CREATE ROLE "${DB_USER}" LOGIN PASSWORD '${DB_PASS_ESC}';
     END IF;
 END
-$$;
+\$\$;
 
-DO $$
+DO \$\$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_database WHERE datname = '${DB_NAME}') THEN
         CREATE DATABASE "${DB_NAME}" OWNER "${DB_USER}";
     END IF;
 END
-$$;
+\$\$;
 SQL
 
 sudo mkdir -p "${INSTALL_DIR}"
