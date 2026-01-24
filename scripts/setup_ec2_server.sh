@@ -125,4 +125,12 @@ Notes:
 DETAILS
 
 echo
-cat "${CONNECTION_FILE}"
+if [[ -f "${CONNECTION_FILE}" ]]; then
+  if [[ -t 1 ]] && command -v "${PAGER:-less}" >/dev/null 2>&1; then
+    "${PAGER:-less}" "${CONNECTION_FILE}"
+  else
+    cat "${CONNECTION_FILE}"
+  fi
+else
+  echo "Warning: ${CONNECTION_FILE} was not created. Check disk permissions and rerun." >&2
+fi
