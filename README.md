@@ -159,28 +159,26 @@ On the server:
 - `lat     = LAT / 1e7`
 - `lon     = LON / 1e7`
 
-## Server setup (EC2 Ubuntu)
+## Server setup (EC2 Linux)
 
 The device posts payloads to an HTTP endpoint. The easiest path is to run the provided
-PostgreSQL-backed ingest service on a **Linux EC2 instance** (tested on Ubuntu). The
+PostgreSQL-backed ingest service on a **Linux EC2 instance** (tested on Ubuntu and Amazon Linux). The
 setup script installs PostgreSQL + a Python Flask app, creates the database/table,
 and writes a connection details file you can use in DB Beaver and `utilities.h`.
 
 ### 1) Clone the repo on your EC2 instance
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y git
+sudo yum install -y git
 git clone <this-repo-url>
 cd PavewiseRainGuage
 ```
 
 **If you cannot use git:** download a zip from GitHub (Code → Download ZIP), copy it to the
-instance, and unzip it:
+instance, and unzip it. On Amazon Linux:
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y unzip curl
+sudo yum install -y unzip curl
 curl -L -o pavewise.zip <zip-download-url>
 unzip pavewise.zip
 cd <unzipped-folder>

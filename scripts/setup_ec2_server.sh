@@ -27,8 +27,21 @@ SERVER_PATH=${SERVER_PATH:-/ingest}
 PUBLIC_IP=$(curl -fsS http://checkip.amazonaws.com || true)
 PUBLIC_IP=${PUBLIC_IP:-"<your-ec2-public-ip>"}
 
-sudo apt-get update
-sudo apt-get install -y python3-venv python3-pip postgresql postgresql-contrib curl rsync
+if command -v apt-get >/dev/null 2>&1; then
+  sudo apt-get update
+  sudo apt-get install -y python3-venv python3-pip postgresql postgresql-contrib curl rsync
+elif command -v yum >/dev/null 2>&1; then
+  sudo yum install -y python3 python3-pip postgresql-server postgresql-contrib curl rsync
+  if ! command -v psql >/dev/null 2>&1; then
+    sudo yum install -y postgresql
+  fi
+  if [[ ! -d /var/lib/pgsql/data ]]; then
+    sudo postgresql-setup --initdb
+  fi
+else
+  echo "Unsupported package manager. Please install Python, PostgreSQL, curl, and rsync manually." >&2
+  exit 1
+fi
 
 sudo systemctl enable --now postgresql
 
