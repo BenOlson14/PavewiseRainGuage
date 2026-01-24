@@ -780,7 +780,7 @@ void setup(){
 
   bool gpsIncludedInUpload = false;
 
-  if (netOk && needGps) {
+  if (modemOk && needGps) {
     double lat = 0.0, lon = 0.0;
     bool hasGpsEpoch = false;
     uint32_t gpsEpoch = 0;
@@ -821,7 +821,7 @@ void setup(){
       DBG_PRINTF("[GPS] FIX FAIL (retry scheduled at epoch %lu)\n",
                  (unsigned long)gpsRetryEpoch);
     }
-  } else if (needGps && !netOk) {
+  } else if (needGps && !modemOk) {
     uint32_t baseEpoch = epochNow;
     if (baseEpoch == 0 && g_epochEstimate > 0) baseEpoch = g_epochEstimate;
     if (baseEpoch == 0) baseEpoch = (uint32_t)(millis() / 1000UL);
