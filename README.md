@@ -160,6 +160,17 @@ On the server:
 - `lat     = LAT / 1e7`
 - `lon     = LON / 1e7`
 
+## Server process manager (systemd auto-restart)
+
+For a production setup, use a systemd service so the worker restarts automatically if it
+dies. Example unit file is included at `server/pavewise.service` and sets `Restart=always`
+with a short delay. Adjust the paths, user, and environment file as needed for your host.
+
+### Where logs go
+- **systemd**: logs are written to journald (stdout/stderr). View with:
+  `journalctl -u pavewise --since "1 hour ago" -f`
+- **Direct run** (`python server/app.py`): logs go to your terminal stdout/stderr.
+
 ## Server setup (EC2 Linux)
 
 The device posts payloads to an HTTP endpoint. The easiest path is to run the provided

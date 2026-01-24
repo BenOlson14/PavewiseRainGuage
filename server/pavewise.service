@@ -1,0 +1,16 @@
+[Unit]
+Description=Pavewise Rain Gauge Ingest API
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/pavewise/server
+EnvironmentFile=/opt/pavewise/server/.env
+ExecStart=/usr/bin/python3 /opt/pavewise/server/app.py
+Restart=always
+RestartSec=5
+User=pavewise
+Group=pavewise
+
+[Install]
+WantedBy=multi-user.target
