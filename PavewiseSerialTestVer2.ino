@@ -1028,7 +1028,7 @@ void setup() {
 
   bool gpsIncludedInUpload = false;
 
-  // GPS fix attempt if modem is powered and GPS is due (network not required).
+  // GPS fix attempt only if modem is up AND GPS is due.
   if (modemOk && needGps) {
     uint32_t gpsTimeoutMs = lastGpsFixMs > 0 ? (lastGpsFixMs * 2UL) : GPS_TIMEOUT_DEFAULT_MS;
     Serial.printf("[GPS] refresh due; attempting fix (timeout %.1f min)...\n",
@@ -1083,7 +1083,7 @@ void setup() {
     if (baseEpoch == 0) baseEpoch = (uint32_t)(millis() / 1000UL);
     gpsRetryEpoch = baseEpoch + GPS_RETRY_SECONDS;
     writeUInt32File(FILE_GPS_RETRY_EPOCH, gpsRetryEpoch);
-    Serial.printf("[GPS] retry scheduled at epoch %lu (network not OK)\n",
+    Serial.printf("[GPS] retry scheduled at epoch %lu (modem not OK)\n",
                   (unsigned long)gpsRetryEpoch);
   } else {
     Serial.println("[GPS] not due");

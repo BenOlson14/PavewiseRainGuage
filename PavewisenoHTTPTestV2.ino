@@ -827,7 +827,7 @@ void setup(){
     if (baseEpoch == 0) baseEpoch = (uint32_t)(millis() / 1000UL);
     gpsRetryEpoch = baseEpoch + GPS_RETRY_SECONDS;
     writeUInt32File(FILE_GPS_RETRY_EPOCH, gpsRetryEpoch);
-    DBG_PRINTF("[GPS] retry scheduled at epoch %lu (network not OK)\n",
+    DBG_PRINTF("[GPS] retry scheduled at epoch %lu (modem not OK)\n",
                (unsigned long)gpsRetryEpoch);
   } else {
     DBG_PRINTLN("[GPS] not due");
