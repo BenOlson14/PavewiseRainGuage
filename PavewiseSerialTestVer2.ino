@@ -71,91 +71,9 @@ POWER STRATEGY (SOFTWARE-ONLY):
 // Rain sensor library (DFRobot tipping bucket)
 #include "DFRobot_RainfallSensor.h"
 
-// ============================= USER SETTINGS =============================
-// All timing and backend configuration lives here so test cadence and server
-// details can be changed without digging through the rest of the code.
-
-// Wake every 15 minutes (deep sleep interval).
-static const uint32_t WAKE_INTERVAL_SECONDS = 15UL * 60UL;
-
-// GPS refresh every 6 hours (re-anchors epoch + location).
-static const uint32_t GPS_REFRESH_SECONDS = 6UL * 3600UL;
-// GPS fix timeout strategy:
-//   - default is 10 minutes
-//   - after a successful fix, next timeout = last_fix_time * 2
-static const uint32_t GPS_TIMEOUT_DEFAULT_MS = 10UL * 60UL * 1000UL;
-// If a fix fails, retry next wake (15 minutes).
-static const uint32_t GPS_RETRY_SECONDS      = 15UL * 60UL;
-
-// HTTP send strategy:
-//   - timeout adapts based on last send duration (x5, capped).
-//   - queue files are retried in order; failures stop the loop.
-static const uint32_t HTTP_TIMEOUT_DEFAULT_MS = 30UL * 1000UL;
-static const uint32_t HTTP_TIMEOUT_MAX_MS     = 120UL * 1000UL;
-static const uint32_t HTTP_TIMEOUT_MULTIPLIER = 5UL;
-static const bool ENABLE_HTTP = true;
-
-// APN (Hologram)
-static const char APN[]       = "hologram";
-static const char GPRS_USER[] = "";
-static const char GPRS_PASS[] = "";
-
-static const char SERVER_HOST[] = "example.com";   // TODO
-static const int  SERVER_PORT   = 80;              // TODO
-static const char SERVER_PATH[] = "/ingest";       // TODO
-
-// ============================= BOARD PINS =============================
-
-// UART settings
-#define UART_BAUD     115200
-
-// ESP32 UART -> SIM7600
-#define MODEM_TX      27
-#define MODEM_RX      26
-
-// SIM7600 control pins (typical LilyGO mapping)
-#define MODEM_PWRKEY  4
-#define MODEM_DTR     32
-#define MODEM_RI      33
-#define MODEM_FLIGHT  25
-#define MODEM_STATUS  34
-
-// LILYGO SIM7600 reference timings:
-// MODEM_POWERON_PULSE_WIDTH_MS = 500, MODEM_START_WAIT_MS = 15000.
-static const uint32_t MODEM_PWRKEY_PREP_MS  = 100;
-static const uint32_t MODEM_PWRKEY_PULSE_MS = 500;
-static const uint32_t MODEM_BOOT_WAIT_MS    = 15000;
-static const uint32_t MODEM_POWEROFF_PULSE_MS = 3000;
-
-// Battery ADC pin (typical on LilyGO)
-#define BAT_ADC_PIN   35
-
-// SD SPI pins
-#define SD_MISO       2
-#define SD_MOSI       15
-#define SD_SCLK       14
-#define SD_CS         13
-
-// ============================= SD FILE STRUCTURE =============================
-
-static const float SD_PURGE_START_PCT  = 80.0f;
-static const float SD_PURGE_TARGET_PCT = 70.0f;
-
-// Permanent daily logs (one file per day)
-static const char *DIR_LOGS  = "/logs";
-
-// Queue records (one file per interval; production would upload and then delete)
-static const char *DIR_QUEUE = "/queue";
-
-// Persistent state for power-loss recovery
-static const char *DIR_STATE = "/state";
-
-static const char *FILE_RAIN_PREV_TOTAL = "/state/rain_prev_total_mm.txt";
-static const char *FILE_GPS_LAST        = "/state/gps_last.txt";
-static const char *FILE_GPS_FIX_MS      = "/state/gps_fix_ms.txt";
-static const char *FILE_GPS_RETRY_EPOCH = "/state/gps_retry_epoch.txt";
-static const char *FILE_IDENTITY        = "/state/identity.txt";
-static const char *FILE_HTTP_LAST_MS    = "/state/http_last_ms.txt";
+#define PAVEWISE_WAKE_INTERVAL_SECONDS (15UL * 60UL)
+#define PAVEWISE_ENABLE_HTTP true
+#include "utilities.h"
 
 // ============================= RTC STATE =============================
 // Survives deep sleep, NOT battery removal.
