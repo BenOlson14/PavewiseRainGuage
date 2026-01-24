@@ -1,13 +1,25 @@
 /************************************************************************************
-Pavewise Mobile Rain Gauge — RELEASE BUILD (Functionally identical to SerialTest)
+Pavewise Mobile Rain Gauge — NO-HTTP TEST BUILD (5-minute cadence)
 
-This file is the SAME logic as SerialTestPavewise_NEW.
-Only difference: ENABLE_DEBUG = 0, meaning no Serial printing occurs.
+SUMMARY (what this build does every wake):
+  1) Boots, downclocks CPU, disables WiFi/BT, mounts SD, and purges old logs
+     if SD usage is above the threshold.
+  2) Reads rainfall + battery voltage, then powers the modem and registers on
+     the cellular network.
+  3) Determines the current epoch: uses stored RTC estimate and re-anchors
+     from GPS every 6 hours (or on first boot), with adaptive GPS timeout.
+  4) Builds a compact payload (IMEI|batt_mv|rain_x100|epoch[|lat|lon]) and:
+       - writes it to a daily CSV log
+       - writes it to a queue file
+       - DOES NOT send HTTP (ENABLE_HTTP=false)
+  5) Gracefully powers down the modem and deep-sleeps for 5 minutes.
 
-This reduces CPU time, UART activity, and prevents Serial from keeping the chip awake.
+This file is the SAME logic as the serial tester build but:
+  - HTTP is disabled.
+  - Wake interval is 5 minutes for higher-frequency local logging/testing.
 ************************************************************************************/
 
-#define ENABLE_DEBUG 0
+#define ENABLE_DEBUG 1
 
 #define TINY_GSM_MODEM_SIM7600
 #define TINY_GSM_USE_GPRS true
@@ -25,9 +37,24 @@ This reduces CPU time, UART activity, and prevents Serial from keeping the chip 
 #include <ArduinoHttpClient.h>
 #include "DFRobot_RainfallSensor.h"
 
+// ============================= USER SETTINGS =============================
+// All timing and backend configuration lives here so cadence and server
+// details can be changed without touching the rest of the code.
 // Same settings as SerialTest (keep identical behavior)
-static const uint32_t WAKE_INTERVAL_SECONDS = 15UL * 60UL;
+static const uint32_t WAKE_INTERVAL_SECONDS = 5UL * 60UL;
 static const uint32_t GPS_REFRESH_SECONDS   = 6UL * 3600UL;
+// GPS fix timeout strategy:
+//   - default is 10 minutes
+//   - after a successful fix, next timeout = last_fix_time * 2
+static const uint32_t GPS_TIMEOUT_DEFAULT_MS = 10UL * 60UL * 1000UL;
+// If a fix fails, retry next wake (15 minutes).
+static const uint32_t GPS_RETRY_SECONDS      = 15UL * 60UL;
+
+// HTTP send strategy (unused in this build but shared for parity).
+static const uint32_t HTTP_TIMEOUT_DEFAULT_MS = 30UL * 1000UL;
+static const uint32_t HTTP_TIMEOUT_MAX_MS     = 120UL * 1000UL;
+static const uint32_t HTTP_TIMEOUT_MULTIPLIER = 5UL;
+static const bool ENABLE_HTTP = false;
 
 static const char APN[]       = "hologram";
 static const char GPRS_USER[] = "";
@@ -38,7 +65,7 @@ static const int  SERVER_PORT   = 80;              // TODO
 static const char SERVER_PATH[] = "/ingest";       // TODO
 
 static const float SD_PURGE_START_PCT  = 80.0f;
-static const float SD_PURGE_TARGET_PCT = 75.0f;
+static const float SD_PURGE_TARGET_PCT = 70.0f;
 
 // Pins identical to SerialTest
 #define UART_BAUD     115200
@@ -46,7 +73,17 @@ static const float SD_PURGE_TARGET_PCT = 75.0f;
 #define MODEM_RX      26
 #define MODEM_PWRKEY  4
 #define MODEM_DTR     32
+#define MODEM_RI      33
 #define MODEM_FLIGHT  25
+#define MODEM_STATUS  34
+
+// LILYGO SIM7600 reference timings:
+// MODEM_POWERON_PULSE_WIDTH_MS = 500, MODEM_START_WAIT_MS = 15000.
+static const uint32_t MODEM_PWRKEY_PREP_MS  = 100;
+static const uint32_t MODEM_PWRKEY_PULSE_MS = 500;
+static const uint32_t MODEM_BOOT_WAIT_MS    = 15000;
+static const uint32_t MODEM_POWEROFF_PULSE_MS = 3000;
+
 #define BAT_ADC_PIN   35
 #define SD_MISO       2
 #define SD_MOSI       15
@@ -59,7 +96,10 @@ static const char *DIR_QUEUE = "/queue";
 static const char *DIR_STATE = "/state";
 static const char *FILE_RAIN_PREV_TOTAL = "/state/rain_prev_total_mm.txt";
 static const char *FILE_GPS_LAST        = "/state/gps_last.txt";
+static const char *FILE_GPS_FIX_MS      = "/state/gps_fix_ms.txt";
+static const char *FILE_GPS_RETRY_EPOCH = "/state/gps_retry_epoch.txt";
 static const char *FILE_IDENTITY        = "/state/identity.txt";
+static const char *FILE_HTTP_LAST_MS    = "/state/http_last_ms.txt";
 
 #if ENABLE_DEBUG
   #define DBG_BEGIN()       do{ Serial.begin(115200); delay(200);}while(0)
@@ -87,6 +127,16 @@ DFRobot_RainfallSensor_I2C RainSensor(&Wire);
 
 static uint32_t elapsedMs(uint32_t startMs){ return (uint32_t)(millis() - startMs); }
 
+// Poll AT until timeout; returns true on first successful response.
+static bool waitForAtResponsive(uint32_t timeoutMs) {
+  uint32_t start = millis();
+  while (elapsedMs(start) < timeoutMs) {
+    if (modem.testAT()) return true;
+    delay(1000);
+  }
+  return false;
+}
+
 static void disableRadiosForPower() {
   WiFi.mode(WIFI_OFF);
   btStop();
@@ -95,14 +145,33 @@ static void disableRadiosForPower() {
 
 static void setLowPowerCpu() { setCpuFrequencyMhz(80); }
 
-static void pulsePwrKey(uint32_t holdMs = 1500) {
+// Configure the SIM7600 control pins to match the proven power-up sequence.
+static void ts7600PowerPinsSetup() {
   pinMode(MODEM_PWRKEY, OUTPUT);
+  pinMode(MODEM_FLIGHT, OUTPUT);
+  pinMode(MODEM_DTR, OUTPUT);
+  pinMode(MODEM_STATUS, INPUT);
+
+  digitalWrite(MODEM_FLIGHT, HIGH);
+  digitalWrite(MODEM_DTR, LOW);
+
   digitalWrite(MODEM_PWRKEY, LOW);
-  delay(holdMs);
+  delay(MODEM_PWRKEY_PREP_MS);
   digitalWrite(MODEM_PWRKEY, HIGH);
+  delay(MODEM_PWRKEY_PULSE_MS);
+  digitalWrite(MODEM_PWRKEY, LOW);
+}
+
+// Helper to pulse PWRKEY when forcing power-down.
+static void pulsePwrKey(uint32_t holdMs = MODEM_POWEROFF_PULSE_MS) {
+  pinMode(MODEM_PWRKEY, OUTPUT);
+  digitalWrite(MODEM_PWRKEY, HIGH);
+  delay(holdMs);
+  digitalWrite(MODEM_PWRKEY, LOW);
   delay(100);
 }
 
+// Mount SD and ensure /logs, /queue, /state exist.
 static bool initSD() {
   SPI.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS);
   if (!SD.begin(SD_CS)) return false;
@@ -112,6 +181,7 @@ static bool initSD() {
   return true;
 }
 
+// Compute % used for log purging.
 static float sdUsedPercent() {
   uint64_t total = SD.totalBytes();
   uint64_t used  = SD.usedBytes();
@@ -127,6 +197,7 @@ static bool isDailyLogName(const String &base) {
   return true;
 }
 
+// Find the oldest daily log by filename ordering.
 static bool findOldestDailyLog(String &oldestPath) {
   File dir = SD.open(DIR_LOGS);
   if (!dir) return false;
@@ -149,15 +220,21 @@ static bool findOldestDailyLog(String &oldestPath) {
   return true;
 }
 
+// Purge logs when SD exceeds the high watermark, delete oldest until target met.
 static void purgeLogsIfNeeded() {
-  if (sdUsedPercent() < SD_PURGE_START_PCT) return;
+  float used = sdUsedPercent();
+  if (used < SD_PURGE_START_PCT) return;
+  DBG_PRINTF("[SD] %.1f%% used -> purging...\n", used);
   while (sdUsedPercent() > SD_PURGE_TARGET_PCT) {
     String oldest;
     if (!findOldestDailyLog(oldest)) break;
+    DBG_PRINTF("[SD] Deleting: %s\n", oldest.c_str());
     SD.remove(oldest.c_str());
   }
+  DBG_PRINTF("[SD] After purge: %.1f%% used\n", sdUsedPercent());
 }
 
+// Read one-line text file from SD (trimmed).
 static bool readTextFile(const char *path, String &out) {
   if (!SD.exists(path)) return false;
   File f = SD.open(path, FILE_READ);
@@ -168,6 +245,7 @@ static bool readTextFile(const char *path, String &out) {
   return out.length() > 0;
 }
 
+// Write one-line text file to SD (overwrite).
 static bool writeTextFile(const char *path, const String &txt) {
   File f = SD.open(path, FILE_WRITE);
   if (!f) return false;
@@ -187,6 +265,19 @@ static bool readFloatFile(const char *path, float &out) {
 
 static bool writeFloatFile(const char *path, float v) {
   return writeTextFile(path, String(v, 3));
+}
+
+// Read uint32 from SD (stored as string).
+static bool readUInt32File(const char *path, uint32_t &out) {
+  String s;
+  if (!readTextFile(path, s)) return false;
+  out = (uint32_t)s.toInt();
+  return true;
+}
+
+// Write uint32 to SD (stored as string).
+static bool writeUInt32File(const char *path, uint32_t v) {
+  return writeTextFile(path, String((unsigned long)v));
 }
 
 static bool loadIdentity(String &iccid, String &imei) {
@@ -264,17 +355,20 @@ static String dailyLogPath(uint32_t epoch){
 static int32_t scaleRain100(float mm){ return (int32_t)lroundf(mm*100.0f); }
 static int32_t scaleDeg1e7(double deg){ return (int32_t)llround(deg*10000000.0); }
 
-static String buildUploadPayload(uint32_t epochNow,uint32_t wakeCounter,float rainDeltaMm,
-                                 uint32_t battMv,int rssi,const String &imei,
-                                 bool includeGps,double lat,double lon) {
+// Build compact payload used for logging/queue (HTTP disabled in this file).
+static String buildUploadPayload(const String &imei,
+                                 uint32_t battMv,
+                                 float rainDeltaMm,
+                                 uint32_t epochNow,
+                                 bool includeGps,
+                                 double lat,
+                                 double lon) {
   int32_t R = scaleRain100(rainDeltaMm);
   String s; s.reserve(includeGps?120:90);
-  s += String(epochNow); s += "|";
-  s += String(wakeCounter); s += "|";
-  s += String(R); s += "|";
+  s += imei; s += "|";
   s += String((unsigned long)battMv); s += "|";
-  s += String(rssi); s += "|";
-  s += imei;
+  s += String(R); s += "|";
+  s += String((unsigned long)epochNow);
   if(includeGps){
     s += "|"; s += String(scaleDeg1e7(lat));
     s += "|"; s += String(scaleDeg1e7(lon));
@@ -283,40 +377,127 @@ static String buildUploadPayload(uint32_t epochNow,uint32_t wakeCounter,float ra
 }
 
 static bool modemPowerOn() {
-  pinMode(MODEM_FLIGHT, OUTPUT); digitalWrite(MODEM_FLIGHT, LOW);
-  pinMode(MODEM_DTR, OUTPUT);    digitalWrite(MODEM_DTR, LOW);
-  pulsePwrKey(1500);
+  DBG_PRINTLN("[MODEM] Powering ON sequence...");
+  ts7600PowerPinsSetup();
+
+  int st = digitalRead(MODEM_STATUS);
+  DBG_PRINTF("[MODEM] MODEM_STATUS after PWRKEY kick: %d (may be unwired)\n", st);
+  DBG_PRINTLN("[MODEM] Waiting ~15s for modem boot...");
+  delay(MODEM_BOOT_WAIT_MS);
+
+  DBG_PRINTLN("[MODEM] Starting UART...");
   SerialAT.begin(UART_BAUD, SERIAL_8N1, MODEM_RX, MODEM_TX);
-  uint32_t start=millis();
-  while(elapsedMs(start)<12000){
-    modem.sendAT("AT");
-    if(modem.waitResponse(250)==1) return true;
-    delay(250);
+  delay(200);
+
+  DBG_PRINTLN("[MODEM] Testing AT responsiveness (up to ~10s)...");
+  if (waitForAtResponsive(10000)) {
+    DBG_PRINTLN("[MODEM] AT OK");
+    return true;
   }
+
+  DBG_PRINTLN("[MODEM] AT timeout, retrying power cycle...");
+
+  // Force modem OFF, then ON again, to avoid a stuck power state.
+  pulsePwrKey();
+  delay(1000);
+  digitalWrite(MODEM_PWRKEY, LOW);
+  delay(MODEM_PWRKEY_PREP_MS);
+  digitalWrite(MODEM_PWRKEY, HIGH);
+  delay(MODEM_PWRKEY_PULSE_MS);
+  digitalWrite(MODEM_PWRKEY, LOW);
+
+  DBG_PRINTLN("[MODEM] Waiting ~15s for modem boot (retry)...");
+  delay(MODEM_BOOT_WAIT_MS);
+
+  DBG_PRINTLN("[MODEM] Testing AT responsiveness (retry, up to ~10s)...");
+  if (waitForAtResponsive(10000)) {
+    DBG_PRINTLN("[MODEM] AT OK (retry)");
+    return true;
+  }
+
+  DBG_PRINTLN("[MODEM] AT timeout");
   return false;
 }
 
 static void modemBestEffortPowerDown() {
+  DBG_PRINTLN("[MODEM] power down (software-only) ...");
   modem.sendAT("+CGPS=0"); modem.waitResponse(1000);
   modem.gprsDisconnect();
   modem.sendAT("+CFUN=0"); modem.waitResponse(2000);
   modem.sendAT("+CPOF");   modem.waitResponse(3000);
   modem.sendAT("+CSCLK=2"); modem.waitResponse(1000);
   digitalWrite(MODEM_DTR, HIGH);
-  pulsePwrKey(1500);
+  pulsePwrKey();
   SerialAT.end();
   digitalWrite(MODEM_FLIGHT, HIGH);
+  DBG_PRINTLN("[MODEM] power down done");
 }
 
 static bool connectNetwork(String &iccid,String &imei,int &rssi) {
   rssi=-1;
-  if(!modem.init()) return false;
+  if(!modem.init()) {
+    DBG_PRINTLN("[MODEM] modem.init failed");
+    return false;
+  }
+#if defined(TINY_GSM_MODEM_HAS_GPS)
+  uint8_t gnssMode = modem.getGNSSMode();
+  DBG_PRINTF("[GPS] GNSS Mode (before): %u\n", gnssMode);
+  modem.setGNSSMode(1, 1);
+  delay(200);
+  DBG_PRINTF("[GPS] GNSS Mode (after) : %u\n", modem.getGNSSMode());
+#endif
   String tIccid=modem.getSimCCID(); if(tIccid.length()) iccid=tIccid;
   String tImei =modem.getIMEI();    if(tImei.length())  imei=tImei;
-  if(!modem.waitForNetwork(60000L)) return false;
-  if(!modem.gprsConnect(APN,GPRS_USER,GPRS_PASS)) return false;
+  DBG_PRINTF("[MODEM] ICCID: %s\n", iccid.c_str());
+  DBG_PRINTF("[MODEM] IMEI : %s\n", imei.c_str());
+  DBG_PRINT("[MODEM] Modem Info: ");
+  DBG_PRINTLN(modem.getModemInfo());
+
+  DBG_PRINTLN("[NET] Waiting for network registration (up to 60s)...");
+  uint32_t start = millis();
+  if(!modem.waitForNetwork(60000L)) {
+    uint32_t elapsed = elapsedMs(start);
+    DBG_PRINTF("[NET] waitForNetwork timeout (%.1f s)\n", elapsed / 1000.0f);
+    return false;
+  }
+  uint32_t netMs = elapsedMs(start);
+  DBG_PRINTF("[NET] Registered in %lu ms (%.1f s)\n",
+             (unsigned long)netMs, netMs / 1000.0f);
+
+  int16_t csq = modem.getSignalQuality();
+  DBG_PRINTF("[NET] RSSI (CSQ): %d\n", (int)csq);
+
+  String op = modem.getOperator();
+  DBG_PRINT("[NET] Operator : ");
+  DBG_PRINTLN(op.length() ? op : "(unknown)");
+
+  DBG_PRINT("[NET] Local IP : ");
+  DBG_PRINTLN(modem.localIP());
+
+  DBG_PRINTLN("[NET] Connecting GPRS...");
+  start = millis();
+  if(!modem.gprsConnect(APN,GPRS_USER,GPRS_PASS)) {
+    uint32_t elapsed = elapsedMs(start);
+    DBG_PRINTF("[NET] gprsConnect failed (%.1f s)\n", elapsed / 1000.0f);
+    return false;
+  }
+  uint32_t gprsMs = elapsedMs(start);
+  DBG_PRINTF("[NET] GPRS OK in %lu ms (%.1f s)\n",
+             (unsigned long)gprsMs, gprsMs / 1000.0f);
   rssi=modem.getSignalQuality();
+  DBG_PRINTF("[NET] RSSI (CSQ): %d\n", rssi);
+  DBG_PRINT("[NET] Local IP : ");
+  DBG_PRINTLN(modem.localIP());
   return true;
+}
+
+// Convert NMEA ddmm.mmmm or dddmm.mmmm into decimal degrees.
+static double nmeaDdmmToDeg(const String &ddmm) {
+  int dot = ddmm.indexOf('.');
+  int degLen = (dot >= 0 && dot > 4) ? 3 : 2;     // lon often has 3 deg digits
+  double deg = ddmm.substring(0, degLen).toDouble();
+  double min = ddmm.substring(degLen).toDouble();
+  return deg + (min / 60.0);
 }
 
 static bool parseCgpsInfo(const String &resp,double &latOut,double &lonOut,bool &hasEpoch,uint32_t &epochOut){
@@ -338,14 +519,7 @@ static bool parseCgpsInfo(const String &resp,double &latOut,double &lonOut,bool 
   String lonStr=parts[2]; lonStr.trim();
   String ew=parts[3]; ew.trim();
 
-  auto nmeaToDeg=[](const String &ddmm)->double{
-    int dot=ddmm.indexOf('.');
-    int degLen=(dot>=0&&dot>4)?3:2;
-    double deg=ddmm.substring(0,degLen).toDouble();
-    double min=ddmm.substring(degLen).toDouble();
-    return deg+min/60.0;
-  };
-  double lat=nmeaToDeg(latStr), lon=nmeaToDeg(lonStr);
+  double lat=nmeaDdmmToDeg(latStr), lon=nmeaDdmmToDeg(lonStr);
   if(ns=="S") lat=-lat;
   if(ew=="W") lon=-lon;
   latOut=lat; lonOut=lon;
@@ -371,11 +545,21 @@ static bool parseCgpsInfo(const String &resp,double &latOut,double &lonOut,bool 
   return true;
 }
 
-static bool gpsAcquire(uint32_t timeoutMs,double &latOut,double &lonOut,bool &hasEpoch,uint32_t &epochOut){
+// Attempt GPS fix; returns lat/lon and (if available) UTC epoch.
+static bool gpsAcquire(uint32_t timeoutMs,
+                       double &latOut,
+                       double &lonOut,
+                       bool &hasEpoch,
+                       uint32_t &epochOut,
+                       uint32_t &fixTimeMsOut){
   hasEpoch=false; epochOut=0;
   modem.sendAT("+CGPS=1");
-  if(modem.waitResponse(2000)!=1) return false;
   uint32_t start=millis();
+  if(modem.waitResponse(2000)!=1) {
+    fixTimeMsOut = elapsedMs(start);
+    return false;
+  }
+  uint32_t lastProgress = 0;
   while(elapsedMs(start)<timeoutMs){
     modem.sendAT("+CGPSINFO");
     String out;
@@ -383,12 +567,18 @@ static bool gpsAcquire(uint32_t timeoutMs,double &latOut,double &lonOut,bool &ha
     if(r==1 && out.indexOf("+CGPSINFO")>=0){
       if(parseCgpsInfo(out,latOut,lonOut,hasEpoch,epochOut)){
         modem.sendAT("+CGPS=0"); modem.waitResponse(1000);
+        fixTimeMsOut = elapsedMs(start);
         return true;
       }
+    }
+    if (elapsedMs(start) - lastProgress >= 5000) {
+      lastProgress = elapsedMs(start);
+      DBG_PRINTF("[GPS] searching... t=%.1f s\n", lastProgress / 1000.0f);
     }
     delay(2000);
   }
   modem.sendAT("+CGPS=0"); modem.waitResponse(1000);
+  fixTimeMsOut = elapsedMs(start);
   return false;
 }
 
@@ -396,7 +586,9 @@ static void appendDaily(const String &path,const String &line){
   bool isNew=!SD.exists(path);
   File f=SD.open(path, FILE_APPEND);
   if(!f) return;
-  if(isNew) f.println("epoch_utc,lat,lon,rain_mm_15m,batt_v,iccid,imei,rssi,gps_included_upload");
+  if(isNew) {
+    f.println("imei,batt_mv,rain_mm_x100,epoch_utc,lat_deg_x1e7,lon_deg_x1e7,gps_fresh");
+  }
   f.println(line);
   f.close();
 }
@@ -415,7 +607,10 @@ static void writeQueueLine(const String &path,const String &line){
   f.close();
 }
 
-static bool httpPostPayload(const String &line,int &statusOut){
+// Send HTTP payload and measure time spent (unused when ENABLE_HTTP=false).
+static bool httpPostPayload(const String &line, uint32_t timeoutMs, uint32_t &durationMs, int &statusOut){
+  http.setHttpResponseTimeout(timeoutMs);
+  uint32_t start = millis();
   http.connectionKeepAlive();
   http.beginRequest();
   http.post(SERVER_PATH);
@@ -426,21 +621,32 @@ static bool httpPostPayload(const String &line,int &statusOut){
   http.endRequest();
   statusOut=http.responseStatusCode();
   (void)http.responseBody();
+  durationMs = elapsedMs(start);
+  if (durationMs > timeoutMs) return false;
   return (statusOut>=200 && statusOut<300);
 }
 
-static bool sendQueueFile(const String &path){
+static uint32_t computeHttpTimeoutMs(uint32_t lastHttpMs) {
+  if (lastHttpMs == 0) return HTTP_TIMEOUT_DEFAULT_MS;
+  uint64_t timeout = (uint64_t)lastHttpMs * HTTP_TIMEOUT_MULTIPLIER;
+  if (timeout > HTTP_TIMEOUT_MAX_MS) timeout = HTTP_TIMEOUT_MAX_MS;
+  return (uint32_t)timeout;
+}
+
+// Send a single queued file (unused when ENABLE_HTTP=false).
+static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &durationMs){
   File f=SD.open(path, FILE_READ);
   if(!f) return false;
   String line=f.readStringUntil('\n');
   f.close();
   int status=0;
-  bool ok=httpPostPayload(line,status);
+  bool ok=httpPostPayload(line, timeoutMs, durationMs, status);
   if(ok) SD.remove(path.c_str());
   return ok;
 }
 
-static void sendAllQueuedFiles(){
+// Walk the queue folder in order and attempt to send each payload (unused here).
+static void sendAllQueuedFiles(uint32_t &lastHttpMs){
   std::vector<String> files;
   File dir=SD.open(DIR_QUEUE);
   if(!dir) return;
@@ -452,14 +658,24 @@ static void sendAllQueuedFiles(){
   }
   dir.close();
   std::sort(files.begin(),files.end(),[](const String&a,const String&b){return a<b;});
+  uint32_t timeoutMs = computeHttpTimeoutMs(lastHttpMs);
   for(auto &p:files){
-    if(!sendQueueFile(p)) break;
+    uint32_t durationMs = 0;
+    if(!sendQueueFile(p, timeoutMs, durationMs)) {
+      if (durationMs > 0) {
+        lastHttpMs = durationMs;
+        writeUInt32File(FILE_HTTP_LAST_MS, lastHttpMs);
+      }
+      break;
+    }
+    lastHttpMs = durationMs;
+    writeUInt32File(FILE_HTTP_LAST_MS, lastHttpMs);
   }
 }
 
 static float readRainTotalMm(){ return RainSensor.getRainfall(); }
 
-static float rainDelta15m(float totalMm){
+static float rainDeltaInterval(float totalMm){
   float prev=totalMm;
   readFloatFile(FILE_RAIN_PREV_TOTAL, prev);
   float d=totalMm-prev;
@@ -473,44 +689,69 @@ void setup(){
   setLowPowerCpu();
   disableRadiosForPower();
 
+  // Wake counter and epoch estimate are stored in RTC memory.
   g_wakeCounter++;
   if(g_epochEstimate>0) g_epochEstimate += WAKE_INTERVAL_SECONDS;
 
-  if(!initSD()){
+  // Mount SD (critical for logs and state). If it fails, sleep.
+  bool sdOk = initSD();
+  DBG_PRINTF("[SD] init: %s\n", sdOk ? "OK" : "FAIL");
+  if(!sdOk){
     esp_sleep_enable_timer_wakeup((uint64_t)WAKE_INTERVAL_SECONDS*1000000ULL);
     DBG_FLUSH();
     esp_deep_sleep_start();
   }
 
+  // Load cached identity so we can build payload even if modem fails.
   String iccid="unknown", imei="unknown";
   loadIdentity(iccid, imei);
 
+  // Load last known GPS (epoch + location) and timing state from SD.
   uint32_t lastGpsEpoch=0;
   double lastLat=0.0, lastLon=0.0;
   loadLastGps(lastGpsEpoch, lastLat, lastLon);
+  uint32_t lastGpsFixMs = 0;
+  readUInt32File(FILE_GPS_FIX_MS, lastGpsFixMs);
+  uint32_t gpsRetryEpoch = 0;
+  readUInt32File(FILE_GPS_RETRY_EPOCH, gpsRetryEpoch);
+  uint32_t lastHttpMs = 0;
+  readUInt32File(FILE_HTTP_LAST_MS, lastHttpMs);
 
+  // Restore epoch estimate from SD if RTC was lost.
   if(g_epochEstimate==0 && lastGpsEpoch>0) g_epochEstimate=lastGpsEpoch;
 
+  // Initialize rainfall sensor (I2C).
   Wire.begin();
-  (void)RainSensor.begin();
+  bool rainOk = RainSensor.begin();
+  DBG_PRINTF("[RAIN] begin(): %s\n", rainOk ? "OK" : "FAIL");
 
+  // Compute rainfall delta for this interval.
   float totalMm=readRainTotalMm();
-  float deltaMm=rainDelta15m(totalMm);
+  float deltaMm=rainDeltaInterval(totalMm);
+  DBG_PRINTF("[RAIN] total=%.3f mm  delta5m=%.3f mm\n", totalMm, deltaMm);
 
   uint32_t battMvRaw=0;
   float battV=readBatteryVoltage(battMvRaw);
   uint32_t battMvVBAT=(uint32_t)lroundf(battV*1000.0f);
+  DBG_PRINTF("[BATT] raw=%lu mV, scaled=%.3f V (~%lu mV)\n",
+             (unsigned long)battMvRaw, battV, (unsigned long)battMvVBAT);
 
-  if(!modemPowerOn()){
+  // If modem can't power on, still log locally and queue payload.
+  bool modemOk = modemPowerOn();
+  DBG_PRINTF("[MODEM] Overall modem connect: %s\n", modemOk ? "OK" : "FAIL");
+  if(!modemOk){
     uint32_t epochNow=(g_epochEstimate>0)?g_epochEstimate:lastGpsEpoch;
     char dailyLine[256];
-    snprintf(dailyLine,sizeof(dailyLine),
-             "%lu,%.7f,%.7f,%.3f,%.3f,%s,%s,%d,%d",
-             (unsigned long)epochNow,lastLat,lastLon,deltaMm,battV,
-             iccid.c_str(),imei.c_str(),-1,0);
-    appendDaily(dailyLogPath(epochNow?epochNow:0), String(dailyLine));
+    snprintf(dailyLine, sizeof(dailyLine),
+             "%s,%lu,%ld,%lu,,,%d",
+             imei.c_str(),
+             (unsigned long)battMvVBAT,
+             (long)scaleRain100(deltaMm),
+             (unsigned long)epochNow,
+             0);
+    appendDaily(dailyLogPath(epochNow ? epochNow : 0), String(dailyLine));
 
-    String payload=buildUploadPayload(epochNow,g_wakeCounter,deltaMm,battMvVBAT,-1,imei,false,0,0);
+    String payload = buildUploadPayload(imei, battMvVBAT, deltaMm, epochNow, false, 0, 0);
     String qPath=makeQueueFilename(epochNow?epochNow:g_wakeCounter,g_wakeCounter);
     writeQueueLine(qPath,payload);
 
@@ -519,64 +760,134 @@ void setup(){
     esp_deep_sleep_start();
   }
 
+  // Connect cellular network (for GPS and for parity with other builds).
   int rssi=-1;
   bool netOk=connectNetwork(iccid,imei,rssi);
   saveIdentity(iccid,imei);
+  DBG_PRINTF("[NET] Registered: %s (RSSI=%d)\n", netOk ? "YES" : "NO", rssi);
 
+  // Determine current epoch for this wake.
   uint32_t epochNow=g_epochEstimate;
   if(epochNow==0 && lastGpsEpoch>0) epochNow=lastGpsEpoch;
 
-  bool haveValidEpoch=(epochNow>0);
-  bool needGps=(!haveValidEpoch) ||
-               (lastGpsEpoch==0) ||
-               (epochNow>=lastGpsEpoch && (epochNow-lastGpsEpoch)>=GPS_REFRESH_SECONDS);
+  // Decide if GPS refresh is due.
+  bool haveValidEpoch = (epochNow > 0);
+  bool gpsRetryDue = (gpsRetryEpoch > 0) && (epochNow >= gpsRetryEpoch);
+  bool needGps = (!haveValidEpoch) ||
+                 (lastGpsEpoch == 0) ||
+                 (epochNow >= lastGpsEpoch && (epochNow - lastGpsEpoch) >= GPS_REFRESH_SECONDS) ||
+                 gpsRetryDue ||
+                 (g_wakeCounter == 1);
 
-  bool gpsIncludedInUpload=false;
+  bool gpsIncludedInUpload = false;
 
-  if(netOk && needGps){
-    double lat=0.0, lon=0.0;
-    bool hasGpsEpoch=false; uint32_t gpsEpoch=0;
-    bool gpsOk=gpsAcquire(8UL*60UL*1000UL,lat,lon,hasGpsEpoch,gpsEpoch);
-    if(gpsOk){
-      lastLat=lat; lastLon=lon;
-      if(hasGpsEpoch){
-        lastGpsEpoch=gpsEpoch;
-        g_epochEstimate=gpsEpoch;
-        epochNow=gpsEpoch;
+  if (modemOk && needGps) {
+    double lat = 0.0, lon = 0.0;
+    bool hasGpsEpoch = false;
+    uint32_t gpsEpoch = 0;
+    uint32_t fixTimeMs = 0;
+    uint32_t gpsTimeoutMs = lastGpsFixMs > 0 ? (lastGpsFixMs * 2UL) : GPS_TIMEOUT_DEFAULT_MS;
+
+    DBG_PRINTF("[GPS] refresh due; attempting fix (timeout %.1f min)...\n",
+               gpsTimeoutMs / 60000.0f);
+    bool gpsOk = gpsAcquire(gpsTimeoutMs, lat, lon, hasGpsEpoch, gpsEpoch, fixTimeMs);
+    if (gpsOk) {
+      lastLat = lat; lastLon = lon;
+      lastGpsFixMs = fixTimeMs;
+      writeUInt32File(FILE_GPS_FIX_MS, lastGpsFixMs);
+      gpsRetryEpoch = 0;
+      writeUInt32File(FILE_GPS_RETRY_EPOCH, gpsRetryEpoch);
+
+      if (hasGpsEpoch) {
+        lastGpsEpoch = gpsEpoch;
+        g_epochEstimate = gpsEpoch;
+        epochNow = gpsEpoch;
+        DBG_PRINTF("[GPS] FIX OK: lat=%.7f lon=%.7f epoch=%lu (%.1f s)\n",
+                   lastLat, lastLon, (unsigned long)gpsEpoch, fixTimeMs / 1000.0f);
       } else {
-        if(epochNow==0) epochNow=(uint32_t)(millis()/1000UL);
-        lastGpsEpoch=epochNow;
-        if(g_epochEstimate==0) g_epochEstimate=epochNow;
+        if (epochNow == 0) epochNow = (uint32_t)(millis() / 1000UL);
+        lastGpsEpoch = epochNow;
+        if (g_epochEstimate == 0) g_epochEstimate = epochNow;
+        DBG_PRINTF("[GPS] FIX OK: lat=%.7f lon=%.7f (no epoch, %.1f s)\n",
+                   lastLat, lastLon, fixTimeMs / 1000.0f);
       }
-      saveLastGps(lastGpsEpoch,lastLat,lastLon);
-      gpsIncludedInUpload=true;
+      saveLastGps(lastGpsEpoch, lastLat, lastLon);
+      gpsIncludedInUpload = true;
+    } else {
+      uint32_t baseEpoch = epochNow;
+      if (baseEpoch == 0 && g_epochEstimate > 0) baseEpoch = g_epochEstimate;
+      if (baseEpoch == 0) baseEpoch = (uint32_t)(millis() / 1000UL);
+      gpsRetryEpoch = baseEpoch + GPS_RETRY_SECONDS;
+      writeUInt32File(FILE_GPS_RETRY_EPOCH, gpsRetryEpoch);
+      DBG_PRINTF("[GPS] FIX FAIL (retry scheduled at epoch %lu)\n",
+                 (unsigned long)gpsRetryEpoch);
     }
+  } else if (needGps && !modemOk) {
+    uint32_t baseEpoch = epochNow;
+    if (baseEpoch == 0 && g_epochEstimate > 0) baseEpoch = g_epochEstimate;
+    if (baseEpoch == 0) baseEpoch = (uint32_t)(millis() / 1000UL);
+    gpsRetryEpoch = baseEpoch + GPS_RETRY_SECONDS;
+    writeUInt32File(FILE_GPS_RETRY_EPOCH, gpsRetryEpoch);
+    DBG_PRINTF("[GPS] retry scheduled at epoch %lu (modem not OK)\n",
+               (unsigned long)gpsRetryEpoch);
+  } else {
+    DBG_PRINTLN("[GPS] not due");
   }
 
+  // Final fallback if we still have no epoch.
   if(epochNow==0) epochNow=lastGpsEpoch;
 
   char dailyLine[256];
-  snprintf(dailyLine,sizeof(dailyLine),
-           "%lu,%.7f,%.7f,%.3f,%.3f,%s,%s,%d,%d",
-           (unsigned long)epochNow,lastLat,lastLon,deltaMm,battV,
-           iccid.c_str(),imei.c_str(),rssi,gpsIncludedInUpload?1:0);
-  appendDaily(dailyLogPath(epochNow?epochNow:0), String(dailyLine));
+  if (gpsIncludedInUpload) {
+    snprintf(dailyLine, sizeof(dailyLine),
+             "%s,%lu,%ld,%lu,%ld,%ld,%d",
+             imei.c_str(),
+             (unsigned long)battMvVBAT,
+             (long)scaleRain100(deltaMm),
+             (unsigned long)epochNow,
+             (long)scaleDeg1e7(lastLat),
+             (long)scaleDeg1e7(lastLon),
+             1);
+  } else {
+    snprintf(dailyLine, sizeof(dailyLine),
+             "%s,%lu,%ld,%lu,,,%d",
+             imei.c_str(),
+             (unsigned long)battMvVBAT,
+             (long)scaleRain100(deltaMm),
+             (unsigned long)epochNow,
+             0);
+  }
+  // Daily CSV log (human readable).
+  appendDaily(dailyLogPath(epochNow ? epochNow : 0), String(dailyLine));
 
-  String payload=buildUploadPayload(epochNow,g_wakeCounter,deltaMm,battMvVBAT,rssi,imei,
-                                    gpsIncludedInUpload,lastLat,lastLon);
+  // Build compact payload for local queue storage.
+  String payload = buildUploadPayload(imei, battMvVBAT, deltaMm, epochNow,
+                                      gpsIncludedInUpload, lastLat, lastLon);
+  DBG_PRINTLN("[PAYLOAD] built:");
+  DBG_PRINTLN(payload);
 
   String qPath=makeQueueFilename(epochNow?epochNow:g_wakeCounter,g_wakeCounter);
   writeQueueLine(qPath,payload);
 
-  if(netOk) sendAllQueuedFiles();
+  // HTTP intentionally disabled in this build.
+  if(netOk && ENABLE_HTTP) {
+    DBG_PRINTF("[HTTP] sending queued payloads (timeout %lu ms)...\n",
+               (unsigned long)computeHttpTimeoutMs(lastHttpMs));
+    sendAllQueuedFiles(lastHttpMs);
+  } else if (!ENABLE_HTTP) {
+    DBG_PRINTLN("[HTTP] disabled");
+  } else {
+    DBG_PRINTLN("[HTTP] skipped (network not OK)");
+  }
 
+  // Housekeeping and power-down.
   purgeLogsIfNeeded();
   modemBestEffortPowerDown();
 
+  DBG_PRINTLN("[SLEEP] entering deep sleep...");
   esp_sleep_enable_timer_wakeup((uint64_t)WAKE_INTERVAL_SECONDS*1000000ULL);
   DBG_FLUSH();
   esp_deep_sleep_start();
 }
 
 void loop(){}
-
