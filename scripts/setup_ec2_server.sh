@@ -24,6 +24,18 @@ SERVER_PORT=${SERVER_PORT:-8080}
 read -rp "HTTP ingest path [/ingest]: " SERVER_PATH
 SERVER_PATH=${SERVER_PATH:-/ingest}
 
+if [[ ! "${DB_NAME}" =~ ^[A-Za-z0-9_]+$ ]]; then
+  echo "Database name must contain only letters, numbers, or underscores." >&2
+  exit 1
+fi
+
+if [[ ! "${DB_USER}" =~ ^[A-Za-z0-9_]+$ ]]; then
+  echo "Database username must contain only letters, numbers, or underscores." >&2
+  exit 1
+fi
+
+DB_PASS_ESC=${DB_PASS//\'/\'\'}
+
 PUBLIC_IP=$(curl -fsS http://checkip.amazonaws.com || true)
 PUBLIC_IP=${PUBLIC_IP:-"<your-ec2-public-ip>"}
 
@@ -37,19 +49,19 @@ fi
 
 sudo systemctl enable --now postgresql
 
-sudo -u postgres psql -v ON_ERROR_STOP=1 -v db_user="${DB_USER}" -v db_pass="${DB_PASS}" -v db_name="${DB_NAME}" <<'SQL'
+sudo -u postgres psql -v ON_ERROR_STOP=1 <<SQL
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'db_user') THEN
-        EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L', :'db_user', :'db_pass');
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${DB_USER}') THEN
+        CREATE ROLE "${DB_USER}" LOGIN PASSWORD '${DB_PASS_ESC}';
     END IF;
 END
 $$;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT FROM pg_database WHERE datname = :'db_name') THEN
-        EXECUTE format('CREATE DATABASE %I OWNER %I', :'db_name', :'db_user');
+    IF NOT EXISTS (SELECT FROM pg_database WHERE datname = '${DB_NAME}') THEN
+        CREATE DATABASE "${DB_NAME}" OWNER "${DB_USER}";
     END IF;
 END
 $$;
