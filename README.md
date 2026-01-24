@@ -159,6 +159,90 @@ On the server:
 - `lat     = LAT / 1e7`
 - `lon     = LON / 1e7`
 
+## Server setup (EC2 Ubuntu)
+
+The device posts payloads to an HTTP endpoint. The easiest path is to run the provided
+PostgreSQL-backed ingest service on a **Linux EC2 instance** (tested on Ubuntu). The
+setup script installs PostgreSQL + a Python Flask app, creates the database/table,
+and writes a connection details file you can use in DB Beaver and `utilities.h`.
+
+### 1) Clone the repo on your EC2 instance
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git
+git clone <this-repo-url>
+cd PavewiseRainGuage
+```
+
+**If you cannot use git:** download a zip from GitHub (Code → Download ZIP), copy it to the
+instance, and unzip it:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y unzip curl
+curl -L -o pavewise.zip <zip-download-url>
+unzip pavewise.zip
+cd <unzipped-folder>
+```
+
+### 2) Run the setup script
+
+```bash
+./scripts/setup_ec2_server.sh
+```
+
+You will be prompted for:
+- Database name
+- Database username
+- Database password
+- Ingest port (default 8080)
+- Ingest path (default `/ingest`)
+
+At the end, the script prints and saves a file at:
+
+```
+/opt/pavewise-rain-gauge/connection_details.txt
+```
+
+This file includes:
+- The HTTP ingest URL for the device.
+- The Postgres connection details for DB Beaver.
+- The exact `PAVEWISE_SERVER_HOST/PORT/PATH` values to paste into `utilities.h`.
+
+### 3) Open firewall rules (EC2 security group)
+
+Allow inbound traffic for:
+- **TCP 8080** (or the port you selected) for the HTTP ingest endpoint.
+- **TCP 5432** for PostgreSQL (DB Beaver access).
+
+### 4) Configure `utilities.h`
+
+Use the values in `connection_details.txt` to update:
+
+```cpp
+#define PAVEWISE_SERVER_HOST "<public-ip>"
+#define PAVEWISE_SERVER_PORT 8080
+#define PAVEWISE_SERVER_PATH "/ingest"
+```
+
+Rebuild and flash the firmware after updating the values.
+
+### 5) Connect from DB Beaver
+
+Create a new **PostgreSQL** connection with:
+- **Host**: your EC2 public IP
+- **Port**: 5432
+- **Database**: the name you provided to the setup script
+- **User / Password**: the credentials you provided
+
+Your readings are stored in the `rain_gauge_readings` table. The server automatically
+converts:
+- `epoch` → `epoch_utc` (UTC timestamp)
+- `rain_x100` → `rain_mm`
+- `batt_mv` → `batt_v`
+- `lat/lon` to decimal degrees (when present)
+
 ## Build selection guidance
 
 - Start with **`PavewisenoHTTPTestV2.ino`** to validate SD/GPS/modem without HTTP.
@@ -170,4 +254,3 @@ On the server:
 - If the Arduino IDE turns the rest of a file blue (comment‑highlight), ensure no inline lambdas are used in parsing code (see `nmeaDdmmToDeg` helper).
 - If GPS fixes are slow, allow a longer timeout or test with clear sky view.
 - If network registration fails, verify SIM activation + APN.
-
