@@ -228,6 +228,10 @@
 #define PAVEWISE_DIR_STATE "/state"
 #endif
 
+#ifndef PAVEWISE_DIR_QUEUE_ATTEMPTS
+#define PAVEWISE_DIR_QUEUE_ATTEMPTS "/state/queue_attempts"
+#endif
+
 #ifndef PAVEWISE_FILE_RAIN_PREV_TOTAL
 #define PAVEWISE_FILE_RAIN_PREV_TOTAL "/state/rain_prev_total_mm.txt"
 #endif
@@ -309,6 +313,7 @@ static const uint32_t MODEM_POWEROFF_PULSE_MS = PAVEWISE_MODEM_POWEROFF_PULSE_MS
 static const char *DIR_LOGS  = PAVEWISE_DIR_LOGS;
 static const char *DIR_QUEUE = PAVEWISE_DIR_QUEUE;
 static const char *DIR_STATE = PAVEWISE_DIR_STATE;
+static const char *DIR_QUEUE_ATTEMPTS = PAVEWISE_DIR_QUEUE_ATTEMPTS;
 static const char *FILE_RAIN_PREV_TOTAL = PAVEWISE_FILE_RAIN_PREV_TOTAL;
 static const char *FILE_GPS_LAST        = PAVEWISE_FILE_GPS_LAST;
 static const char *FILE_GPS_FIX_MS      = PAVEWISE_FILE_GPS_FIX_MS;

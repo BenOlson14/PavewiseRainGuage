@@ -174,6 +174,7 @@ static bool initSD() {
   if (!SD.exists(DIR_LOGS))  SD.mkdir(DIR_LOGS);
   if (!SD.exists(DIR_QUEUE)) SD.mkdir(DIR_QUEUE);
   if (!SD.exists(DIR_STATE)) SD.mkdir(DIR_STATE);
+  if (!SD.exists(DIR_QUEUE_ATTEMPTS)) SD.mkdir(DIR_QUEUE_ATTEMPTS);
 
   return true;
 }
@@ -822,6 +823,33 @@ static String ensureQueuePath(const String &name) {
   return String(DIR_QUEUE) + "/" + name;
 }
 
+// Track failed delivery attempts per queue file.
+static const uint8_t QUEUE_MAX_FAILURES = 10;
+
+static String queueAttemptPath(const String &queuePath) {
+  String base = queuePath;
+  int slash = base.lastIndexOf('/');
+  if (slash >= 0) base = base.substring(slash + 1);
+  return String(DIR_QUEUE_ATTEMPTS) + "/" + base + ".fail";
+}
+
+static uint32_t readQueueFailures(const String &queuePath) {
+  String path = queueAttemptPath(queuePath);
+  uint32_t count = 0;
+  readUInt32File(path.c_str(), count);
+  return count;
+}
+
+static void writeQueueFailures(const String &queuePath, uint32_t count) {
+  String path = queueAttemptPath(queuePath);
+  writeUInt32File(path.c_str(), count);
+}
+
+static void clearQueueFailures(const String &queuePath) {
+  String path = queueAttemptPath(queuePath);
+  if (SD.exists(path)) SD.remove(path.c_str());
+}
+
 // Serial-only queue preload test guard (one-time per SD card).
 static const char *FILE_QUEUE_PRELOAD_DONE = "/state/queue_preload_done.txt";
 
@@ -933,8 +961,20 @@ static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &dura
       writeBoolFile(FILE_RAIN_UNIT_SENT, true);
     }
     SD.remove(path.c_str());
+    clearQueueFailures(path);
   } else if (ok && !stored) {
     DBG_PRINTLN("[QUEUE] skipping delete: missing stored ack");
+  }
+  if (!ok || !stored) {
+    uint32_t failures = readQueueFailures(path) + 1;
+    if (failures >= QUEUE_MAX_FAILURES) {
+      DBG_PRINTF("[QUEUE] dropping %s after %u failures\n",
+                 path.c_str(), (unsigned)failures);
+      SD.remove(path.c_str());
+      clearQueueFailures(path);
+      return true;
+    }
+    writeQueueFailures(path, failures);
   }
   return ok;
 }
