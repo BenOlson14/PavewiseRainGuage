@@ -210,12 +210,16 @@ reverting to `localhost` only.
 ```bash
 sudo apt-get update
 sudo apt-get install -y git python3 python3-pip
-REPO_URL="<this-repo-url>"
+REPO_URL="https://github.com/BenOlson14/PavewiseRainGuage.git"
 git clone --depth 1 --filter=blob:none --sparse "${REPO_URL}" pavewise-rain-gauge
 cd pavewise-rain-gauge
 git sparse-checkout set server
 cd server
 ```
+
+If Git prompts for a username, the URL is likely private or requires authentication.
+For public access, make sure you are using the exact URL above. For private repos,
+use a GitHub Personal Access Token (PAT) as the password when prompted.
 
 If you already cloned the repo, you can also run the original scripts from the repo root:
 
@@ -255,7 +259,7 @@ Main server:
 ```bash
 sudo apt-get update
 sudo apt-get install -y git python3 python3-pip
-REPO_URL="<this-repo-url>"
+REPO_URL="https://github.com/BenOlson14/PavewiseRainGuage.git"
 git clone --depth 1 --filter=blob:none --sparse "${REPO_URL}" pavewise-rain-gauge
 cd pavewise-rain-gauge
 git sparse-checkout set server
@@ -268,7 +272,7 @@ Testing server:
 ```bash
 sudo apt-get update
 sudo apt-get install -y git python3 python3-pip
-REPO_URL="<this-repo-url>"
+REPO_URL="https://github.com/BenOlson14/PavewiseRainGuage.git"
 git clone --depth 1 --filter=blob:none --sparse "${REPO_URL}" pavewise-rain-gauge
 cd pavewise-rain-gauge
 git sparse-checkout set server
