@@ -13,5 +13,12 @@ CREATE TABLE IF NOT EXISTS rain_gauge_readings (
     received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS device_rain_units (
+    imei TEXT PRIMARY KEY,
+    rain_unit TEXT NOT NULL CHECK (rain_unit IN ('mm', 'in')),
+    first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_rain_gauge_epoch_utc
     ON rain_gauge_readings (epoch_utc DESC);
