@@ -9,11 +9,11 @@ This repository contains three primary firmware sketches for a LilyGo T-SIM7600 
   - Prints detailed modem, network, GPS, SD, rain, battery, and HTTP timing output.
   - Sends HTTP (when configured).
 - **`PavewiseReleaseV2.ino`**
-  - Field build with minimal serial output for performance/power.
+  - Field build with the same runtime logic as the serial tester but **no serial/debug output** enabled.
   - Sends HTTP payloads and logs to SD.
 - **`PavewisenoHTTPTestV2.ino`**
-  - Same logic as serial tester but **HTTP disabled** and **5‑minute cadence**.
-  - Useful for validating SD logging, GPS refresh, and modem bring‑up before enabling HTTP.
+  - Same logic as serial tester but **HTTP disabled**.
+  - Uses the same 15‑minute cadence to keep behavior consistent without uploading data.
 - **`TestSerial_fixed_gps.ino`**
   - Known‑working reference for GPS + cellular bring‑up sequence.
 
@@ -45,12 +45,12 @@ Before running on hardware, set these values in **all three sketches** (or at le
    ```
 
 3. **Wake interval**
-   - Serial / Release: 15 minutes (see `WAKE_INTERVAL_SECONDS`)
-   - No‑HTTP: 5 minutes (explicitly set)
+   - Serial / Release / No‑HTTP: 15 minutes (see `WAKE_INTERVAL_SECONDS`)
 
 4. **Optional: GPS / HTTP timing knobs** (already set but can be tuned):
    - GPS refresh every 6 hours (`GPS_REFRESH_SECONDS`)
    - GPS timeout: default 10 minutes, then adaptive (`GPS_TIMEOUT_DEFAULT_MS`)
+   - GPS timeout minimum: 3 minutes (`GPS_TIMEOUT_MIN_MS`)
    - HTTP timeout multiplier: 5x last send (`HTTP_TIMEOUT_MULTIPLIER`)
 
 ## System flow (high‑level)
@@ -113,6 +113,7 @@ Each wake cycle (after deep sleep) runs the **entire program in `setup()`**:
 - **First boot**: GPS is forced if no valid epoch is stored.
 - **Timeout strategy**:
   - Default = 10 minutes.
+  - Minimum floor = 3 minutes.
   - After a successful fix: next timeout = `fix_time × 2`.
   - If fix fails: retry on the next 15‑minute interval.
 - **Time anchoring**:
@@ -132,7 +133,7 @@ The code uses a **queue folder on SD** to guarantee eventual delivery.
 2. Files are sorted by name (oldest first).
 3. Each queued file is sent **individually**.
 4. On success:
-   - The file is deleted.
+   - The file is deleted **only after** a successful HTTP 2xx response.
    - The HTTP duration is recorded to tune the next timeout.
 5. On failure:
    - The file is **left in the queue**.
@@ -143,6 +144,7 @@ The code uses a **queue folder on SD** to guarantee eventual delivery.
 - The next wake attempts the queue again, starting with the oldest file.
 - If the network is still down or HTTP fails again, the data stays queued.
 - If it succeeds later, files are removed one by one in order.
+- The device treats `{"status":"stored"}` as the expected server acknowledgment.
 
 This ensures **no data is lost**, even with intermittent cellular coverage.
 
@@ -177,6 +179,31 @@ The device posts payloads to an HTTP endpoint. The easiest path is to run the pr
 PostgreSQL-backed ingest service on a **Linux EC2 instance** (tested on Ubuntu). The
 setup script installs PostgreSQL + a Python Flask app, creates the database/table,
 and writes a connection details file you can use in DB Beaver and `utilities.h`.
+
+### Security groups (AWS inbound rules)
+You must explicitly allow the inbound ports that match your firmware and server config:
+
+- **HTTP ingest port**: allow the port configured in `PAVEWISE_PORT` (default `8080`).
+  - Source can be `0.0.0.0/0` for public access, **or** a restricted CIDR if devices
+    have static IPs or a fixed NAT gateway.
+- **SSH (22)**: allow from your admin IP only.
+- **PostgreSQL (5432)**: **do not open to the public internet** for production.
+  - Restrict to your VPC CIDR or a bastion host.
+  - If you only need local access, keep it closed and use SSH tunneling.
+
+The setup script currently configures PostgreSQL to listen on all interfaces
+(`listen_addresses='*'`) and allows `0.0.0.0/0` in `pg_hba.conf`. This is convenient for
+initial testing, but you should lock it down for production by restricting the CIDR or
+reverting to `localhost` only.
+
+### Hardening for production (recommended)
+- **Restrict database access**: limit `pg_hba.conf` to your VPC CIDR or `127.0.0.1/32`
+  and change `listen_addresses` to `localhost` if you only need local access.
+- **Reduce DB privileges**: the setup script grants broad privileges to the app user
+  for convenience. For production, create a dedicated role with only `INSERT` on the
+  `rain_gauge_readings` table (no `CREATEDB`), and rotate the password regularly.
+- **Ingress control**: if devices are behind a fixed NAT, restrict the HTTP security
+  group rule to that IP range instead of `0.0.0.0/0`.
 
 ### 1) Clone the repo on your EC2 instance
 
@@ -218,6 +245,13 @@ You will be prompted for:
 - Each worker can also run multiple **threads**. Threads are useful for I/O-bound work like HTTP + database calls.
 - Defaults are chosen to be safe on small EC2 instances; you can raise workers/threads if CPU and memory allow it.
 - If you change these later, rerun the setup script to regenerate the systemd service.
+
+### How the ingest worker stays alive
+- The `pavewise-ingest` **systemd service** runs Gunicorn and restarts on failure
+  (`Restart=on-failure` with a short delay).
+- The Flask app also includes a lightweight **heartbeat thread** that logs a periodic
+  "alive" message (`PAVEWISE_HEARTBEAT_SECONDS`, default 900s). This helps confirm
+  the worker is still running even when no device posts are arriving.
 
 At the end, the script prints and saves a file at:
 
