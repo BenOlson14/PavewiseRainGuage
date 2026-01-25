@@ -91,6 +91,8 @@ HttpClient http(gsm, SERVER_HOST, SERVER_PORT);
 DFRobot_RainfallSensor_I2C RainSensor(&Wire);
 
 // ============================= SMALL HELPERS =============================
+// Small delay between queued HTTP sends to avoid back-to-back modem churn.
+static const uint32_t HTTP_QUEUE_SEND_DELAY_MS = 1000;
 
 static const uint32_t HTTP_QUEUE_SEND_DELAY_MS = 1000;
 
@@ -757,6 +759,7 @@ static uint32_t computeHttpTimeoutMs(uint32_t lastHttpMs) {
   return (uint32_t)timeout;
 }
 
+// Normalize queue paths so files always resolve under DIR_QUEUE.
 static String ensureQueuePath(const String &name) {
   if (name.startsWith("/")) return name;
   return String(DIR_QUEUE) + "/" + name;
@@ -831,9 +834,9 @@ static void sendAllQueuedFiles(uint32_t &lastHttpMs) {
   dir.close();
   Serial.printf("[QUEUE] %u payload(s) queued\n", (unsigned)files.size());
   std::sort(files.begin(), files.end(), [](const String &a, const String &b) { return a < b; });
-  uint32_t timeoutMs = computeHttpTimeoutMs(lastHttpMs);
   for (auto &p : files) {
     uint32_t durationMs = 0;
+    uint32_t timeoutMs = computeHttpTimeoutMs(lastHttpMs);
     if (!sendQueueFile(p, timeoutMs, durationMs)) {
       if (durationMs > 0) {
         lastHttpMs = durationMs;
@@ -976,7 +979,9 @@ void setup() {
 
   // GPS fix attempt only if modem is up AND GPS is due.
   if (modemOk && needGps) {
+    // Adaptive GPS timeout with a minimum floor so we always search >= 3 minutes.
     uint32_t gpsTimeoutMs = lastGpsFixMs > 0 ? (lastGpsFixMs * 2UL) : GPS_TIMEOUT_DEFAULT_MS;
+    if (gpsTimeoutMs < GPS_TIMEOUT_MIN_MS) gpsTimeoutMs = GPS_TIMEOUT_MIN_MS;
     Serial.printf("[GPS] refresh due; attempting fix (timeout %.1f min)...\n",
                   gpsTimeoutMs / 60000.0f);
 
