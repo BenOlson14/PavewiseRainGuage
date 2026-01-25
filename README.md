@@ -1,21 +1,15 @@
 # Pavewise Mobile Rain Gauge (LilyGo T-SIM7600)
 
-This repository contains three primary firmware sketches for a LilyGo T-SIM7600 (SIM7600 + ESP32) rain gauge using the DFRobot rainfall sensor. The sketches share the same core logic but are tuned for different deployment stages (serial debug, release, and no-HTTP logging). The goal is to **collect rainfall and battery data at a fixed cadence**, periodically refresh GPS and time from GNSS, log to SD, and (when enabled) send a compact payload over HTTP.
+This repository contains two primary firmware sketches for a LilyGo T-SIM7600 (SIM7600 + ESP32) rain gauge using the DFRobot rainfall sensor. The sketches share the same core logic but are tuned for different deployment stages (release and no-HTTP logging). The goal is to **collect rainfall and battery data at a fixed cadence**, periodically refresh GPS and time from GNSS, log to SD, and (when enabled) send a compact payload over HTTP.
 
 ## Files and roles
 
-- **`PavewiseSerialTestVer2.ino`**
-  - Debug build intended for serial visibility.
-  - Prints detailed modem, network, GPS, SD, rain, battery, and HTTP timing output.
-  - Sends HTTP (when configured).
-- **`PavewiseReleaseV2.ino`**
-  - Field build with the same runtime logic as the serial tester but **no serial/debug output** enabled.
-  - Sends HTTP payloads and logs to SD.
+- **`PavewiseSerialTestVer2.ino`** (release build)
+  - Field build that sends HTTP payloads and logs to SD.
+  - Serial output is kept minimal to reduce power/time spent awake.
 - **`PavewisenoHTTPTestV2.ino`**
-  - Same logic as serial tester but **HTTP disabled**.
+  - Same logic as the release build but **HTTP disabled**.
   - Uses the same 15‑minute cadence to keep behavior consistent without uploading data.
-- **`TestSerial_fixed_gps.ino`**
-  - Known‑working reference for GPS + cellular bring‑up sequence.
 
 ## Hardware assumptions
 
@@ -24,11 +18,11 @@ This repository contains three primary firmware sketches for a LilyGo T-SIM7600 
 - **SD card**: SPI mode
 - **Battery measurement**: ADC pin 35 (scaled with board divider)
 
-Pin definitions are consistent with the working `TestSerial_fixed_gps.ino` sketch and shared across all three Pavewise sketches.
+Pin definitions are shared across both Pavewise sketches.
 
 ## User configuration (required)
 
-Before running on hardware, set these values in **all three sketches** (or at least in the one you will use):
+Before running on hardware, set these values in **both sketches** (or at least in the one you will use):
 
 1. **APN settings** (for cellular data):
    ```cpp
@@ -37,7 +31,7 @@ Before running on hardware, set these values in **all three sketches** (or at le
    static const char GPRS_PASS[] = "";
    ```
 
-2. **HTTP server settings** (used by serial + release builds):
+2. **HTTP server settings** (used by the release build):
    ```cpp
    static const char SERVER_HOST[] = "example.com";
    static const int  SERVER_PORT   = 80;
@@ -99,9 +93,9 @@ Each wake cycle (after deep sleep) runs the **entire program in `setup()`**:
    - Payload also stored as a queued file under `/queue/`.
 
 10. **HTTP send (if enabled)**
-    - Serial + Release: sends queued payloads via HTTP.
+    - Release: sends queued payloads via HTTP.
     - No‑HTTP: explicitly disabled.
-    - Serial + Release: logs the HTTP status and any response body (e.g. `{"status":"stored"}`) so you can confirm the worker accepted the payload.
+    - Release: logs the HTTP status and any response body (e.g. `{"status":"stored"}`) so you can confirm the worker accepted the payload.
 
 11. **Shutdown + deep sleep**
     - Attempts graceful modem power‑down.
@@ -128,7 +122,7 @@ The code uses a **queue folder on SD** to guarantee eventual delivery.
 - Each payload is written to `/queue/q_<epoch>_<wake>.txt`.
 - Each file stores exactly one payload line.
 
-### Send flow (serial + release builds)
+### Send flow (release build)
 1. On each wake, if network is available, the code scans `/queue`.
 2. Files are sorted by name (oldest first).
 3. Each queued file is sent **individually**.
@@ -152,13 +146,15 @@ This ensures **no data is lost**, even with intermittent cellular coverage.
 
 To reduce data cost, the payload avoids commas and decimals:
 
-- `RAIN_X100` = rain millimeters × 100 (integer)
+- `RAIN_X100` = rain millimeters × 100 (integer, always mm on the wire)
 - `BATT_MV` = battery voltage in millivolts (integer)
 - `LAT` / `LON` = degrees × 1e7 (integer)
 
 On the server:
-- `rain_mm = RAIN_X100 / 100.0`
-- `batt_v  = BATT_MV / 1000.0`
+- `rain_amount` is stored in the device's preferred unit (`mm` or `in`).
+  - `rain_amount = RAIN_X100 / 100.0` when the unit is `mm`.
+  - `rain_amount = (RAIN_X100 / 100.0) / 25.4` when the unit is `in`.
+- `batt_v = BATT_MV / 1000.0`
 - `lat     = LAT / 1e7`
 - `lon     = LON / 1e7`
 
@@ -348,7 +344,7 @@ Create a new **PostgreSQL** connection with:
 Your readings are stored in the `rain_gauge_readings` table. The server automatically
 converts:
 - `epoch` → `epoch_utc` (UTC timestamp)
-- `rain_x100` → `rain_mm` (using the unit stored for that IMEI)
+- `rain_x100` → `rain_amount` (stored in the unit configured for that IMEI)
 - `batt_mv` → `batt_v`
 - `lat/lon` to decimal degrees (when present)
 
@@ -358,7 +354,7 @@ Device reporting units are stored in the `device_rain_units` table (keyed by IME
 
 - Start with **`PavewisenoHTTPTestV2.ino`** to validate SD/GPS/modem without HTTP.
 - Move to **`PavewiseSerialTestVer2.ino`** to validate HTTP and queue behavior.
-- Deploy **`PavewiseReleaseV2.ino`** for field use (minimal serial overhead).
+- Deploy **`PavewiseSerialTestVer2.ino`** for field use (minimal serial overhead).
 - If you enable `PAVEWISE_ENABLE_DEBUG`, expect longer wake times and higher UART/power
   usage due to Serial I/O.
 

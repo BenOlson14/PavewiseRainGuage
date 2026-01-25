@@ -1,10 +1,8 @@
 CREATE TABLE IF NOT EXISTS rain_gauge_readings (
     id BIGSERIAL PRIMARY KEY,
     imei TEXT NOT NULL,
-    batt_mv INTEGER NOT NULL,
     batt_v NUMERIC(10, 3) NOT NULL,
-    rain_x100 INTEGER NOT NULL,
-    rain_mm NUMERIC(10, 2) NOT NULL,
+    rain_amount NUMERIC(10, 4) NOT NULL,
     epoch_seconds BIGINT NOT NULL,
     epoch_utc TIMESTAMPTZ NOT NULL,
     lat_deg NUMERIC(10, 7),
