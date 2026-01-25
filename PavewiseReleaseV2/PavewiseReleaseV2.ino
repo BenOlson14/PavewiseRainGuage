@@ -552,6 +552,21 @@ static uint32_t computeHttpTimeoutMs(uint32_t lastHttpMs) {
   return (uint32_t)timeout;
 }
 
+static String buildUnitPayload(const String &imei) {
+  String s;
+  s.reserve(32);
+  s += imei;
+  s += "|";
+  s += rainUnitToken();
+  return s;
+}
+
+static String extractImeiFromPayload(const String &payload) {
+  int sep = payload.indexOf('|');
+  if (sep <= 0) return String();
+  return payload.substring(0, sep);
+}
+
 // Send a single queued file (delete only on success).
 static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &durationMs, bool &unitSent){
   File f=SD.open(path, FILE_READ);
@@ -567,6 +582,7 @@ static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &dura
   DBG_PRINTF("[QUEUE] sending %s (%u bytes on disk)\n", path.c_str(), (unsigned)fileSize);
   bool ok=httpPostPayload(line, timeoutMs, durationMs, status, response);
   bool stored = response.indexOf("stored") >= 0;
+  bool unitRequired = response.indexOf("unit_required") >= 0;
   if (response.length() > 0) {
     DBG_PRINTF("[HTTP] response=%s\n", response.c_str());
     if (stored) {
@@ -574,6 +590,31 @@ static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &dura
     }
   } else {
     DBG_PRINTLN("[HTTP] response empty");
+  }
+  if (!stored && unitRequired) {
+    String imei = extractImeiFromPayload(line);
+    if (imei.length()) {
+      String unitPayload = buildUnitPayload(imei);
+      uint32_t unitDuration = 0;
+      int unitStatus = 0;
+      String unitResponse;
+      bool unitOk = httpPostPayload(unitPayload, timeoutMs, unitDuration, unitStatus, unitResponse);
+      bool unitStored = unitResponse.indexOf("stored") >= 0;
+      if (unitOk && unitStored) {
+        unitSent = true;
+        writeBoolFile(FILE_RAIN_UNIT_SENT, true);
+        uint32_t retryDuration = 0;
+        int retryStatus = 0;
+        String retryResponse;
+        bool retryOk = httpPostPayload(line, timeoutMs, retryDuration, retryStatus, retryResponse);
+        bool retryStored = retryResponse.indexOf("stored") >= 0;
+        durationMs = retryDuration;
+        if (retryOk && retryStored) {
+          SD.remove(path.c_str());
+          return true;
+        }
+      }
+    }
   }
   if(ok && stored) {
     if (!unitSent && payloadHasUnitToken(line)) {

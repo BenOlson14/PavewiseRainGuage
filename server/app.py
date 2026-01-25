@@ -26,6 +26,17 @@ def get_db_conn():
     )
 
 
+def _normalize_unit(raw_unit: str | None) -> str | None:
+    if raw_unit is None:
+        return None
+    unit = raw_unit.lower()
+    if unit in ("inch", "inches"):
+        unit = "in"
+    if unit not in ("mm", "in"):
+        return None
+    return unit
+
+
 def parse_payload(raw_payload: str) -> dict:
     parts = [part.strip() for part in raw_payload.strip().split("|") if part.strip()]
     if len(parts) not in (4, 5, 6, 7):
@@ -44,11 +55,7 @@ def parse_payload(raw_payload: str) -> dict:
     has_gps = False
 
     if len(parts) in (5, 7):
-        unit = parts[4].lower()
-        if unit in ("inch", "inches"):
-            unit = "in"
-        if unit not in ("mm", "in"):
-            unit = None
+        unit = _normalize_unit(parts[4])
 
     if len(parts) == 6:
         lat_deg = int(parts[4]) / 1e7
@@ -113,6 +120,29 @@ def ingest():
     if not payload:
         app.logger.warning("ingest_empty_payload")
         return jsonify({"error": "Empty payload"}), 400
+
+    unit_parts = [part.strip() for part in payload.split("|") if part.strip()]
+    if len(unit_parts) == 2:
+        unit = _normalize_unit(unit_parts[1])
+        if unit is None:
+            return jsonify({"error": "Invalid unit payload"}), 400
+        try:
+            with get_db_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO device_rain_units (imei, rain_unit, first_seen, last_seen)
+                        VALUES (%s, %s, NOW(), NOW())
+                        ON CONFLICT (imei) DO UPDATE
+                            SET rain_unit = EXCLUDED.rain_unit,
+                                last_seen = NOW()
+                        """,
+                        (unit_parts[0], unit),
+                    )
+        except Exception as exc:
+            app.logger.exception("db_unit_insert_error payload=%s error=%s", payload, exc)
+            return jsonify({"error": "Database insert failed"}), 500
+        return jsonify({"status": "stored"})
 
     try:
         parsed = parse_payload(payload)
