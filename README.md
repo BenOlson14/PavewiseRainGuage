@@ -205,37 +205,41 @@ reverting to `localhost` only.
 - **Ingress control**: if devices are behind a fixed NAT, restrict the HTTP security
   group rule to that IP range instead of `0.0.0.0/0`.
 
-### 1) Clone the repo on your EC2 instance
+### 1) Fetch only the server folder on your EC2 instance (recommended)
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y git
-git clone <this-repo-url>
-cd PavewiseRainGuage
+sudo apt-get install -y git python3 python3-pip
+REPO_URL="https://github.com/BenOlson14/PavewiseRainGuage.git"
+git clone --depth 1 --filter=blob:none --sparse "${REPO_URL}" pavewise-rain-gauge
+cd pavewise-rain-gauge
+git sparse-checkout set server
+cd server
 ```
 
-**If you cannot use git:** download a zip from GitHub (Code → Download ZIP), copy it to the
-instance, and unzip it.
+If Git prompts for a username, the URL is likely private or requires authentication.
+For public access, make sure you are using the exact URL above. For private repos,
+use a GitHub Personal Access Token (PAT) as the password when prompted.
 
-```bash
-sudo apt-get update
-sudo apt-get install -y unzip curl
-curl -L -o pavewise.zip <zip-download-url>
-unzip pavewise.zip
-cd <unzipped-folder>
-```
-
-### 2) Run the setup script
+If you already cloned the repo, you can also run the original scripts from the repo root:
 
 ```bash
 ./scripts/setup_ec2_server.sh
 ```
 
+### 2) Run the setup script (main server)
+
+```bash
+sudo bash setup_ec2_server.sh
+```
+
+> Note: Run as a normal user with sudo, or as root. The script uses sudo internally.
+
 You will be prompted for:
 - Database name
 - Database username
 - Database password
-- Ingest port (default 80)
+- Ingest port (default 8080)
 - Ingest path (default `/ingest`)
 - Gunicorn worker count (default `CPU * 2 + 1`)
 - Gunicorn threads per worker (default `4`)
@@ -245,7 +249,35 @@ You will be prompted for:
 If you want a dedicated test database/user, run:
 
 ```bash
-./scripts/setup_ec2_server_test.sh
+sudo bash setup_ec2_server_test.sh
+```
+
+**One-shot copy/paste blocks**
+
+Main server:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git python3 python3-pip
+REPO_URL="https://github.com/BenOlson14/PavewiseRainGuage.git"
+git clone --depth 1 --filter=blob:none --sparse "${REPO_URL}" pavewise-rain-gauge
+cd pavewise-rain-gauge
+git sparse-checkout set server
+cd server
+sudo bash setup_ec2_server.sh
+```
+
+Testing server:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git python3 python3-pip
+REPO_URL="https://github.com/BenOlson14/PavewiseRainGuage.git"
+git clone --depth 1 --filter=blob:none --sparse "${REPO_URL}" pavewise-rain-gauge
+cd pavewise-rain-gauge
+git sparse-checkout set server
+cd server
+sudo bash setup_ec2_server_test.sh
 ```
 
 This script uses the defaults for port/path/workers and creates:
@@ -280,7 +312,7 @@ This file includes:
 ### 3) Open firewall rules (EC2 security group)
 
 Allow inbound traffic for:
-- **TCP 80** (or the port you selected) for the HTTP ingest endpoint.
+- **TCP 8080** (or the port you selected) for the HTTP ingest endpoint.
 - **TCP 5432** for PostgreSQL (DB Beaver access).
 
 ### 4) Configure `utilities.h`
@@ -289,7 +321,7 @@ Use the values in `connection_details.txt` to update:
 
 ```cpp
 #define PAVEWISE_SERVER_HOST "<public-ip>"
-  #define PAVEWISE_SERVER_PORT 80
+  #define PAVEWISE_SERVER_PORT 8080
 #define PAVEWISE_SERVER_PATH "/ingest"
 ```
 

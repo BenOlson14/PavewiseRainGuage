@@ -66,6 +66,8 @@ DFRobot_RainfallSensor_I2C RainSensor(&Wire);
 
 // Delay between queued HTTP sends to avoid back-to-back modem churn.
 static const uint32_t HTTP_QUEUE_SEND_DELAY_MS = 1000;
+// Delay after sending unit-required payload before retrying original payload.
+static const uint32_t HTTP_UNIT_RETRY_DELAY_MS = 1000;
 
 static uint32_t elapsedMs(uint32_t startMs){ return (uint32_t)(millis() - startMs); }
 
@@ -468,10 +470,12 @@ static bool gpsAcquire(uint32_t timeoutMs,
                        uint32_t &epochOut,
                        uint32_t &fixTimeMsOut){
   hasEpoch=false; epochOut=0;
+  DBG_PRINTF("[GPS] Starting GPS fix attempt (timeout=%lu ms)\n", (unsigned long)timeoutMs);
   modem.sendAT("+CGPS=1");
   uint32_t start=millis();
   if(modem.waitResponse(2000)!=1) {
     fixTimeMsOut = elapsedMs(start);
+    DBG_PRINTLN("[GPS] Failed to enable GNSS.");
     return false;
   }
   while(elapsedMs(start)<timeoutMs){
@@ -482,6 +486,7 @@ static bool gpsAcquire(uint32_t timeoutMs,
       if(parseCgpsInfo(out,latOut,lonOut,hasEpoch,epochOut)){
         modem.sendAT("+CGPS=0"); modem.waitResponse(1000);
         fixTimeMsOut = elapsedMs(start);
+        DBG_PRINTF("[GPS] Fix ok in %lu ms.\n", (unsigned long)fixTimeMsOut);
         return true;
       }
     }
@@ -489,6 +494,7 @@ static bool gpsAcquire(uint32_t timeoutMs,
   }
   modem.sendAT("+CGPS=0"); modem.waitResponse(1000);
   fixTimeMsOut = elapsedMs(start);
+  DBG_PRINTF("[GPS] Fix timed out after %lu ms.\n", (unsigned long)fixTimeMsOut);
   return false;
 }
 
@@ -580,6 +586,7 @@ static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &dura
   int status=0;
   String response;
   DBG_PRINTF("[QUEUE] sending %s (%u bytes on disk)\n", path.c_str(), (unsigned)fileSize);
+  DBG_PRINTF("[QUEUE] payload: %s\n", line.c_str());
   bool ok=httpPostPayload(line, timeoutMs, durationMs, status, response);
   bool stored = response.indexOf("stored") >= 0;
   bool unitRequired = response.indexOf("unit_required") >= 0;
@@ -595,6 +602,7 @@ static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &dura
     String imei = extractImeiFromPayload(line);
     if (imei.length()) {
       String unitPayload = buildUnitPayload(imei);
+      DBG_PRINTF("[QUEUE] unit payload: %s\n", unitPayload.c_str());
       uint32_t unitDuration = 0;
       int unitStatus = 0;
       String unitResponse;
@@ -603,6 +611,11 @@ static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &dura
       if (unitOk && unitStored) {
         unitSent = true;
         writeBoolFile(FILE_RAIN_UNIT_SENT, true);
+        if (HTTP_UNIT_RETRY_DELAY_MS > 0) {
+          DBG_PRINTF("[QUEUE] Waiting %lu ms before retrying payload...\n",
+                     (unsigned long)HTTP_UNIT_RETRY_DELAY_MS);
+          delay(HTTP_UNIT_RETRY_DELAY_MS);
+        }
         uint32_t retryDuration = 0;
         int retryStatus = 0;
         String retryResponse;
@@ -761,6 +774,8 @@ void setup(){
 
     bool gpsOk = gpsAcquire(gpsTimeoutMs, lat, lon, hasGpsEpoch, gpsEpoch, fixTimeMs);
     if (gpsOk) {
+      DBG_PRINTF("[GPS] Fix data lat=%.7f lon=%.7f epoch=%lu hasEpoch=%d\n",
+                 lat, lon, (unsigned long)gpsEpoch, hasGpsEpoch ? 1 : 0);
       lastLat = lat; lastLon = lon;
       lastGpsFixMs = fixTimeMs;
       writeUInt32File(FILE_GPS_FIX_MS, lastGpsFixMs);
@@ -780,6 +795,7 @@ void setup(){
       saveLastGps(lastGpsEpoch, lastLat, lastLon);
       gpsIncludedInUpload = true;
     } else {
+      DBG_PRINTLN("[GPS] Fix failed; scheduling retry.");
       uint32_t baseEpoch = epochNow;
       if (baseEpoch == 0 && g_epochEstimate > 0) baseEpoch = g_epochEstimate;
       if (baseEpoch == 0) baseEpoch = (uint32_t)(millis() / 1000UL);
