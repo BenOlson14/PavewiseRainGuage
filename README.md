@@ -240,6 +240,19 @@ You will be prompted for:
 - Gunicorn worker count (default `CPU * 2 + 1`)
 - Gunicorn threads per worker (default `4`)
 
+### 2a) Run the testing setup script (fixed defaults)
+
+If you want a dedicated test database/user, run:
+
+```bash
+./scripts/setup_ec2_server_test.sh
+```
+
+This script uses the defaults for port/path/workers and creates:
+- **Database**: `PavewiseTest`
+- **User**: `PavewiseTester`
+- **Password**: `Pavewise`
+
 **Worker sizing guidance**
 - Each Gunicorn **worker** runs a separate Python process. More workers allow more concurrent device requests.
 - Each worker can also run multiple **threads**. Threads are useful for I/O-bound work like HTTP + database calls.
@@ -280,6 +293,16 @@ Use the values in `connection_details.txt` to update:
 #define PAVEWISE_SERVER_PATH "/ingest"
 ```
 
+`utilities.h` includes a **connection placeholder** comment block that shows example
+`PAVEWISE_SERVER_HOST/PORT/PATH` values.
+
+Additional device options you can adjust:
+- `PAVEWISE_ENABLE_DEBUG` to toggle Serial logging.
+- `PAVEWISE_RAIN_UNIT` to choose `"mm"` or `"in"` for reported rainfall (sent once on
+  the first successful upload for each IMEI).
+  - If the server does not recognize the IMEI and the unit was not included, it
+    responds with `unit_required` and the device will retry with the unit until stored.
+
 Rebuild and flash the firmware after updating the values.
 
 ### 5) Connect from DB Beaver
@@ -293,15 +316,19 @@ Create a new **PostgreSQL** connection with:
 Your readings are stored in the `rain_gauge_readings` table. The server automatically
 converts:
 - `epoch` → `epoch_utc` (UTC timestamp)
-- `rain_x100` → `rain_mm`
+- `rain_x100` → `rain_mm` (using the unit stored for that IMEI)
 - `batt_mv` → `batt_v`
 - `lat/lon` to decimal degrees (when present)
+
+Device reporting units are stored in the `device_rain_units` table (keyed by IMEI).
 
 ## Build selection guidance
 
 - Start with **`PavewisenoHTTPTestV2.ino`** to validate SD/GPS/modem without HTTP.
 - Move to **`PavewiseSerialTestVer2.ino`** to validate HTTP and queue behavior.
 - Deploy **`PavewiseReleaseV2.ino`** for field use (minimal serial overhead).
+- If you enable `PAVEWISE_ENABLE_DEBUG`, expect longer wake times and higher UART/power
+  usage due to Serial I/O.
 
 ## Troubleshooting tips
 

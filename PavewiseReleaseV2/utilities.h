@@ -7,12 +7,35 @@
 // All user-configurable settings live in this file so you can adjust APN,
 // server details, timing, and pin mappings without editing the main sketches.
 
-// Wake interval (seconds).
+// Debug serial logging.
+// Example: #define PAVEWISE_ENABLE_DEBUG true
+//   - true  => Serial logging enabled (more power/CPU usage)
+//   - false => Serial logging disabled (default for release)
+#ifndef PAVEWISE_ENABLE_DEBUG
+#define PAVEWISE_ENABLE_DEBUG false
+#endif
+
+// Serial baud rate when debug logging is enabled.
+// Example: #define PAVEWISE_DEBUG_BAUD 115200
+#ifndef PAVEWISE_DEBUG_BAUD
+#define PAVEWISE_DEBUG_BAUD 115200
+#endif
+
+// Rainfall units reported to the server (sent once on first successful upload).
+// Expected values: "mm" or "in"
+// Example: #define PAVEWISE_RAIN_UNIT "mm"
+#ifndef PAVEWISE_RAIN_UNIT
+#define PAVEWISE_RAIN_UNIT "mm"
+#endif
+
+// Wake interval (seconds) between deep-sleep cycles.
+// Example: #define PAVEWISE_WAKE_INTERVAL_SECONDS (15UL * 60UL)  // 15 minutes
 #ifndef PAVEWISE_WAKE_INTERVAL_SECONDS
 #define PAVEWISE_WAKE_INTERVAL_SECONDS (15UL * 60UL)
 #endif
 
-// GPS refresh interval (seconds).
+// GPS refresh interval (seconds) to re-anchor time/location.
+// Example: #define PAVEWISE_GPS_REFRESH_SECONDS (6UL * 3600UL)  // 6 hours
 #ifndef PAVEWISE_GPS_REFRESH_SECONDS
 #define PAVEWISE_GPS_REFRESH_SECONDS (6UL * 3600UL)
 #endif
@@ -20,15 +43,18 @@
 // GPS fix timeout strategy:
 //   - default is 10 minutes
 //   - after a successful fix, next timeout = last_fix_time * 2
+// Example: #define PAVEWISE_GPS_TIMEOUT_DEFAULT_MS (10UL * 60UL * 1000UL)
 #ifndef PAVEWISE_GPS_TIMEOUT_DEFAULT_MS
 #define PAVEWISE_GPS_TIMEOUT_DEFAULT_MS (10UL * 60UL * 1000UL)
 #endif
 #ifndef PAVEWISE_GPS_TIMEOUT_MIN_MS
 // Ensure GPS attempts always run for at least 3 minutes.
+// Example: #define PAVEWISE_GPS_TIMEOUT_MIN_MS (3UL * 60UL * 1000UL)
 #define PAVEWISE_GPS_TIMEOUT_MIN_MS (3UL * 60UL * 1000UL)
 #endif
 
 // If a fix fails, retry next wake (seconds).
+// Example: #define PAVEWISE_GPS_RETRY_SECONDS (15UL * 60UL)
 #ifndef PAVEWISE_GPS_RETRY_SECONDS
 #define PAVEWISE_GPS_RETRY_SECONDS (15UL * 60UL)
 #endif
@@ -36,36 +62,48 @@
 // HTTP send strategy:
 //   - timeout adapts based on last send duration (x5, capped).
 //   - queue files are retried in order; failures stop the loop.
+// Example: #define PAVEWISE_HTTP_TIMEOUT_DEFAULT_MS (30UL * 1000UL)
 #ifndef PAVEWISE_HTTP_TIMEOUT_DEFAULT_MS
 #define PAVEWISE_HTTP_TIMEOUT_DEFAULT_MS (30UL * 1000UL)
 #endif
 
+// Example: #define PAVEWISE_HTTP_TIMEOUT_MAX_MS (60UL * 1000UL)
 #ifndef PAVEWISE_HTTP_TIMEOUT_MAX_MS
-#define PAVEWISE_HTTP_TIMEOUT_MAX_MS (120UL * 1000UL)
+#define PAVEWISE_HTTP_TIMEOUT_MAX_MS (60UL * 1000UL)
 #endif
 
+// Example: #define PAVEWISE_HTTP_TIMEOUT_MULTIPLIER (5UL)
 #ifndef PAVEWISE_HTTP_TIMEOUT_MULTIPLIER
 #define PAVEWISE_HTTP_TIMEOUT_MULTIPLIER (5UL)
 #endif
 
+// Enable/disable HTTP uploads.
+// Example: #define PAVEWISE_ENABLE_HTTP true
 #ifndef PAVEWISE_ENABLE_HTTP
 #define PAVEWISE_ENABLE_HTTP true
 #endif
 
 // Cellular APN settings.
+// Example: #define PAVEWISE_APN "hologram"
 #ifndef PAVEWISE_APN
 #define PAVEWISE_APN "hologram"
 #endif
 
+// Example: #define PAVEWISE_GPRS_USER ""
 #ifndef PAVEWISE_GPRS_USER
 #define PAVEWISE_GPRS_USER ""
 #endif
 
+// Example: #define PAVEWISE_GPRS_PASS ""
 #ifndef PAVEWISE_GPRS_PASS
 #define PAVEWISE_GPRS_PASS ""
 #endif
 
-// Web server settings.
+// Web server settings (ingest endpoint).
+// Example:
+//   #define PAVEWISE_SERVER_HOST "18.218.149.57"
+//   #define PAVEWISE_SERVER_PORT 8080
+//   #define PAVEWISE_SERVER_PATH "/ingest"
 #ifndef PAVEWISE_SERVER_HOST
 #define PAVEWISE_SERVER_HOST "18.218.149.57"
 #endif
@@ -78,11 +116,13 @@
 #define PAVEWISE_SERVER_PATH "/ingest"
 #endif
 
-// SD purge thresholds.
+// SD purge thresholds (percentage of card used).
+// Example: #define PAVEWISE_SD_PURGE_START_PCT 80.0f
 #ifndef PAVEWISE_SD_PURGE_START_PCT
 #define PAVEWISE_SD_PURGE_START_PCT 80.0f
 #endif
 
+// Example: #define PAVEWISE_SD_PURGE_TARGET_PCT 70.0f
 #ifndef PAVEWISE_SD_PURGE_TARGET_PCT
 #define PAVEWISE_SD_PURGE_TARGET_PCT 70.0f
 #endif
@@ -198,11 +238,19 @@
 #define PAVEWISE_FILE_IDENTITY "/state/identity.txt"
 #endif
 
+#ifndef PAVEWISE_FILE_RAIN_UNIT_SENT
+#define PAVEWISE_FILE_RAIN_UNIT_SENT "/state/rain_unit_sent.txt"
+#endif
+
 #ifndef PAVEWISE_FILE_HTTP_LAST_MS
 #define PAVEWISE_FILE_HTTP_LAST_MS "/state/http_last_ms.txt"
 #endif
 
 // ============================= CONFIG CONSTANTS =============================
+
+static const bool ENABLE_DEBUG = PAVEWISE_ENABLE_DEBUG;
+static const uint32_t DEBUG_BAUD = PAVEWISE_DEBUG_BAUD;
+static const char RAIN_UNIT[] = PAVEWISE_RAIN_UNIT;
 
 static const uint32_t WAKE_INTERVAL_SECONDS = PAVEWISE_WAKE_INTERVAL_SECONDS;
 static const uint32_t GPS_REFRESH_SECONDS   = PAVEWISE_GPS_REFRESH_SECONDS;
@@ -255,5 +303,6 @@ static const char *FILE_GPS_FIX_MS      = PAVEWISE_FILE_GPS_FIX_MS;
 static const char *FILE_GPS_RETRY_EPOCH = PAVEWISE_FILE_GPS_RETRY_EPOCH;
 static const char *FILE_IDENTITY        = PAVEWISE_FILE_IDENTITY;
 static const char *FILE_HTTP_LAST_MS    = PAVEWISE_FILE_HTTP_LAST_MS;
+static const char *FILE_RAIN_UNIT_SENT  = PAVEWISE_FILE_RAIN_UNIT_SENT;
 
 #endif

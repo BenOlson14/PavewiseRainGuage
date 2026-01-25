@@ -8,7 +8,7 @@ SUMMARY (what this build does every wake):
      the cellular network.
   3) Determines the current epoch: uses stored RTC estimate and re-anchors
      from GPS every 6 hours (or on first boot), with adaptive GPS timeout.
-  4) Builds a compact payload (IMEI|batt_mv|rain_x100|epoch[|lat|lon]) and:
+  4) Builds a compact payload (IMEI|batt_mv|rain_x100|epoch[|unit][|lat|lon]) and:
        - writes it to a daily CSV log
        - writes it to a queue file
        - DOES NOT send HTTP (ENABLE_HTTP=false)
@@ -19,13 +19,12 @@ This file is the SAME logic as the serial tester build but:
   - Wake interval matches the serial build for consistent behavior.
 ************************************************************************************/
 
-#define ENABLE_DEBUG 1
-
 #define TINY_GSM_MODEM_SIM7600
 #define TINY_GSM_USE_GPRS true
 #define TINY_GSM_USE_WIFI false
 
 #include <Arduino.h>
+#include <cstring>
 #include <Wire.h>
 #include <SPI.h>
 #include <SD.h>
@@ -42,8 +41,8 @@ This file is the SAME logic as the serial tester build but:
 #define PAVEWISE_ENABLE_HTTP false
 #include "utilities.h"
 
-#if ENABLE_DEBUG
-  #define DBG_BEGIN()       do{ Serial.begin(115200); delay(200);}while(0)
+#if PAVEWISE_ENABLE_DEBUG
+  #define DBG_BEGIN()       do{ Serial.begin(DEBUG_BAUD); delay(200);}while(0)
   #define DBG_PRINT(x)      Serial.print(x)
   #define DBG_PRINTLN(x)    Serial.println(x)
   #define DBG_PRINTF(...)   Serial.printf(__VA_ARGS__)
@@ -224,6 +223,26 @@ static bool writeUInt32File(const char *path, uint32_t v) {
   return writeTextFile(path, String((unsigned long)v));
 }
 
+static bool readBoolFile(const char *path, bool &out) {
+  String s;
+  if (!readTextFile(path, s)) return false;
+  s.trim();
+  out = (s == "1" || s.equalsIgnoreCase("true"));
+  return true;
+}
+
+static bool writeBoolFile(const char *path, bool v) {
+  return writeTextFile(path, v ? "1" : "0");
+}
+
+static bool payloadHasUnitToken(const String &payload) {
+  int count = 0;
+  for (size_t i = 0; i < payload.length(); i++) {
+    if (payload[i] == '|') count++;
+  }
+  return (count == 4 || count == 6);
+}
+
 static bool loadIdentity(String &iccid, String &imei) {
   String line;
   if (!readTextFile(FILE_IDENTITY, line)) return false;
@@ -296,7 +315,8 @@ static String dailyLogPath(uint32_t epoch){
 }
 
 // Payload compression helpers (same as SerialTest)
-static int32_t scaleRain100(float mm){ return (int32_t)lroundf(mm*100.0f); }
+static const char *rainUnitToken() { return RAIN_UNIT; }
+static int32_t scaleRain100(float value){ return (int32_t)lroundf(value*100.0f); }
 static int32_t scaleDeg1e7(double deg){ return (int32_t)llround(deg*10000000.0); }
 
 // Build compact payload used for logging/queue (HTTP disabled in this file).
@@ -304,6 +324,7 @@ static String buildUploadPayload(const String &imei,
                                  uint32_t battMv,
                                  float rainDeltaMm,
                                  uint32_t epochNow,
+                                 bool includeUnit,
                                  bool includeGps,
                                  double lat,
                                  double lon) {
@@ -313,6 +334,9 @@ static String buildUploadPayload(const String &imei,
   s += String((unsigned long)battMv); s += "|";
   s += String(R); s += "|";
   s += String((unsigned long)epochNow);
+  if (includeUnit) {
+    s += "|"; s += rainUnitToken();
+  }
   if(includeGps){
     s += "|"; s += String(scaleDeg1e7(lat));
     s += "|"; s += String(scaleDeg1e7(lon));
@@ -529,7 +553,7 @@ static void appendDaily(const String &path,const String &line){
   File f=SD.open(path, FILE_APPEND);
   if(!f) return;
   if(isNew) {
-    f.println("imei,batt_mv,rain_mm_x100,epoch_utc,lat_deg_x1e7,lon_deg_x1e7,gps_fresh");
+    f.println("payload");
   }
   f.println(line);
   f.close();
@@ -582,7 +606,7 @@ static uint32_t computeHttpTimeoutMs(uint32_t lastHttpMs) {
 }
 
 // Send a single queued file (unused when ENABLE_HTTP=false).
-static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &durationMs){
+static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &durationMs, bool &unitSent){
   File f=SD.open(path, FILE_READ);
   if(!f) return false;
   String line=f.readStringUntil('\n');
@@ -591,12 +615,18 @@ static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &dura
   String response;
   bool ok=httpPostPayload(line, timeoutMs, durationMs, status, response);
   bool stored = response.indexOf("stored") >= 0;
-  if(ok && stored) SD.remove(path.c_str());
+  if(ok && stored) {
+    if (!unitSent && payloadHasUnitToken(line)) {
+      unitSent = true;
+      writeBoolFile(FILE_RAIN_UNIT_SENT, true);
+    }
+    SD.remove(path.c_str());
+  }
   return ok;
 }
 
 // Walk the queue folder in order and attempt to send each payload (unused here).
-static void sendAllQueuedFiles(uint32_t &lastHttpMs){
+static void sendAllQueuedFiles(uint32_t &lastHttpMs, bool &unitSent){
   std::vector<String> files;
   File dir=SD.open(DIR_QUEUE);
   if(!dir) return;
@@ -611,11 +641,9 @@ static void sendAllQueuedFiles(uint32_t &lastHttpMs){
   for(auto &p:files){
     uint32_t durationMs = 0;
     uint32_t timeoutMs = computeHttpTimeoutMs(lastHttpMs);
-    if(!sendQueueFile(p, timeoutMs, durationMs)) {
-      if (durationMs > 0) {
-        lastHttpMs = durationMs;
-        writeUInt32File(FILE_HTTP_LAST_MS, lastHttpMs);
-      }
+    if(!sendQueueFile(p, timeoutMs, durationMs, unitSent)) {
+      lastHttpMs = HTTP_TIMEOUT_MAX_MS;
+      writeUInt32File(FILE_HTTP_LAST_MS, lastHttpMs);
       break;
     }
     lastHttpMs = durationMs;
@@ -667,6 +695,8 @@ void setup(){
   readUInt32File(FILE_GPS_RETRY_EPOCH, gpsRetryEpoch);
   uint32_t lastHttpMs = 0;
   readUInt32File(FILE_HTTP_LAST_MS, lastHttpMs);
+  bool unitSent = false;
+  readBoolFile(FILE_RAIN_UNIT_SENT, unitSent);
 
   // Restore epoch estimate from SD if RTC was lost.
   if(g_epochEstimate==0 && lastGpsEpoch>0) g_epochEstimate=lastGpsEpoch;
@@ -692,17 +722,9 @@ void setup(){
   DBG_PRINTF("[MODEM] Overall modem connect: %s\n", modemOk ? "OK" : "FAIL");
   if(!modemOk){
     uint32_t epochNow=(g_epochEstimate>0)?g_epochEstimate:lastGpsEpoch;
-    char dailyLine[256];
-    snprintf(dailyLine, sizeof(dailyLine),
-             "%s,%lu,%ld,%lu,,,%d",
-             imei.c_str(),
-             (unsigned long)battMvVBAT,
-             (long)scaleRain100(deltaMm),
-             (unsigned long)epochNow,
-             0);
-    appendDaily(dailyLogPath(epochNow ? epochNow : 0), String(dailyLine));
-
-    String payload = buildUploadPayload(imei, battMvVBAT, deltaMm, epochNow, false, 0, 0);
+    String payload = buildUploadPayload(imei, battMvVBAT, deltaMm, epochNow,
+                                        !unitSent, false, 0, 0);
+    appendDaily(dailyLogPath(epochNow ? epochNow : 0), payload);
     String qPath=makeQueueFilename(epochNow?epochNow:g_wakeCounter,g_wakeCounter);
     writeQueueLine(qPath,payload);
 
@@ -794,32 +816,10 @@ void setup(){
   // Final fallback if we still have no epoch.
   if(epochNow==0) epochNow=lastGpsEpoch;
 
-  char dailyLine[256];
-  if (gpsIncludedInUpload) {
-    snprintf(dailyLine, sizeof(dailyLine),
-             "%s,%lu,%ld,%lu,%ld,%ld,%d",
-             imei.c_str(),
-             (unsigned long)battMvVBAT,
-             (long)scaleRain100(deltaMm),
-             (unsigned long)epochNow,
-             (long)scaleDeg1e7(lastLat),
-             (long)scaleDeg1e7(lastLon),
-             1);
-  } else {
-    snprintf(dailyLine, sizeof(dailyLine),
-             "%s,%lu,%ld,%lu,,,%d",
-             imei.c_str(),
-             (unsigned long)battMvVBAT,
-             (long)scaleRain100(deltaMm),
-             (unsigned long)epochNow,
-             0);
-  }
-  // Daily CSV log (human readable).
-  appendDaily(dailyLogPath(epochNow ? epochNow : 0), String(dailyLine));
-
   // Build compact payload for local queue storage.
   String payload = buildUploadPayload(imei, battMvVBAT, deltaMm, epochNow,
-                                      gpsIncludedInUpload, lastLat, lastLon);
+                                      !unitSent, gpsIncludedInUpload, lastLat, lastLon);
+  appendDaily(dailyLogPath(epochNow ? epochNow : 0), payload);
   DBG_PRINTLN("[PAYLOAD] built:");
   DBG_PRINTLN(payload);
 
@@ -830,7 +830,7 @@ void setup(){
   if(netOk && ENABLE_HTTP) {
     DBG_PRINTF("[HTTP] sending queued payloads (timeout %lu ms)...\n",
                (unsigned long)computeHttpTimeoutMs(lastHttpMs));
-    sendAllQueuedFiles(lastHttpMs);
+    sendAllQueuedFiles(lastHttpMs, unitSent);
   } else if (!ENABLE_HTTP) {
     DBG_PRINTLN("[HTTP] disabled");
   } else {
