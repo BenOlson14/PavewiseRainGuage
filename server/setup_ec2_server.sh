@@ -9,8 +9,8 @@ ENV_FILE="/etc/pavewise-ingest.env"
 SERVICE_FILE="/etc/systemd/system/pavewise-ingest.service"
 CONNECTION_FILE="${INSTALL_DIR}/connection_details.txt"
 
-if [[ $(id -u) -eq 0 ]]; then
-  echo "Please run this script as a non-root user with sudo access." >&2
+if ! command -v sudo >/dev/null 2>&1; then
+  echo "This script requires sudo. Install sudo or run as a user with sudo access." >&2
   exit 1
 fi
 

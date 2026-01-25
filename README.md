@@ -229,6 +229,8 @@ If you already cloned the repo, you can also run the original scripts from the r
 sudo bash setup_ec2_server.sh
 ```
 
+> Note: Run as a normal user with sudo, or as root. The script uses sudo internally.
+
 You will be prompted for:
 - Database name
 - Database username
