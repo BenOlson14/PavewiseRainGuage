@@ -91,6 +91,8 @@ HttpClient http(gsm, SERVER_HOST, SERVER_PORT);
 DFRobot_RainfallSensor_I2C RainSensor(&Wire);
 
 // ============================= SMALL HELPERS =============================
+// Small delay between queued HTTP sends to avoid back-to-back modem churn.
+static const uint32_t HTTP_QUEUE_SEND_DELAY_MS = 1000;
 
 // Safe elapsed millis calculator (handles wrap naturally).
 static uint32_t elapsedMs(uint32_t startMs) {
@@ -755,9 +757,38 @@ static uint32_t computeHttpTimeoutMs(uint32_t lastHttpMs) {
   return (uint32_t)timeout;
 }
 
+// Normalize queue paths so files always resolve under DIR_QUEUE.
 static String ensureQueuePath(const String &name) {
   if (name.startsWith("/")) return name;
   return String(DIR_QUEUE) + "/" + name;
+}
+
+// Serial-only queue preload test guard (one-time per SD card).
+static const char *FILE_QUEUE_PRELOAD_DONE = "/state/queue_preload_done.txt";
+
+// Optionally preload synthetic payloads into /queue to validate queue sends.
+static void preloadQueueTestPayloads(uint32_t epochNow, const String &imei, uint32_t battMvVBAT) {
+  if (!QUEUE_PRELOAD_TEST_ENABLED) return;
+  if (SD.exists(FILE_QUEUE_PRELOAD_DONE)) return;
+  if (epochNow == 0) epochNow = g_wakeCounter;
+
+  Serial.printf("[QUEUE] preload test enabled: adding %u payloads\n",
+                (unsigned)QUEUE_PRELOAD_COUNT);
+  for (uint8_t i = 0; i < QUEUE_PRELOAD_COUNT; i++) {
+    uint32_t fakeEpoch = epochNow - (uint32_t)(i + 1) * 60UL;
+    String payload = buildUploadPayload(
+      imei,
+      battMvVBAT,
+      0.0f,
+      fakeEpoch,
+      false,
+      0.0,
+      0.0
+    );
+    String qPath = makeQueueFilename(fakeEpoch, g_wakeCounter + i + 1);
+    writeQueueLine(qPath, payload);
+  }
+  writeTextFile(FILE_QUEUE_PRELOAD_DONE, "1");
 }
 
 // Send HTTP payload and measure time spent (used to adapt next timeout).
@@ -766,7 +797,6 @@ static bool httpPostPayload(const String &line, uint32_t timeoutMs, uint32_t &du
   Serial.printf("[HTTP] Attempting POST http://%s:%d%s\n", SERVER_HOST, SERVER_PORT, SERVER_PATH);
   Serial.printf("[HTTP] Payload length: %u bytes\n", (unsigned)line.length());
   uint32_t start = millis();
-  http.connectionKeepAlive();
   http.beginRequest();
   http.post(SERVER_PATH);
   http.sendHeader("Content-Type", "text/plain");
@@ -830,9 +860,9 @@ static void sendAllQueuedFiles(uint32_t &lastHttpMs) {
   dir.close();
   Serial.printf("[QUEUE] %u payload(s) queued\n", (unsigned)files.size());
   std::sort(files.begin(), files.end(), [](const String &a, const String &b) { return a < b; });
-  uint32_t timeoutMs = computeHttpTimeoutMs(lastHttpMs);
   for (auto &p : files) {
     uint32_t durationMs = 0;
+    uint32_t timeoutMs = computeHttpTimeoutMs(lastHttpMs);
     if (!sendQueueFile(p, timeoutMs, durationMs)) {
       if (durationMs > 0) {
         lastHttpMs = durationMs;
@@ -842,6 +872,7 @@ static void sendAllQueuedFiles(uint32_t &lastHttpMs) {
     }
     lastHttpMs = durationMs;
     writeUInt32File(FILE_HTTP_LAST_MS, lastHttpMs);
+    delay(HTTP_QUEUE_SEND_DELAY_MS);
   }
 }
 
@@ -974,7 +1005,9 @@ void setup() {
 
   // GPS fix attempt only if modem is up AND GPS is due.
   if (modemOk && needGps) {
+    // Adaptive GPS timeout with a minimum floor so we always search >= 3 minutes.
     uint32_t gpsTimeoutMs = lastGpsFixMs > 0 ? (lastGpsFixMs * 2UL) : GPS_TIMEOUT_DEFAULT_MS;
+    if (gpsTimeoutMs < GPS_TIMEOUT_MIN_MS) gpsTimeoutMs = GPS_TIMEOUT_MIN_MS;
     Serial.printf("[GPS] refresh due; attempting fix (timeout %.1f min)...\n",
                   gpsTimeoutMs / 60000.0f);
 
@@ -1085,6 +1118,9 @@ void setup() {
   String qPath = makeQueueFilename(epochNow ? epochNow : g_wakeCounter, g_wakeCounter);
   writeQueueLine(qPath, payload);
   Serial.printf("[QUEUE] wrote %s\n", qPath.c_str());
+
+  // Optional queue preload test before sending.
+  preloadQueueTestPayloads(epochNow, imei, battMvVBAT);
 
   // Attempt HTTP sending for queued files (if enabled and network OK).
   if (ENABLE_HTTP) {
