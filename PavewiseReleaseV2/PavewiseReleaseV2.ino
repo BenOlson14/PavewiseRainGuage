@@ -648,7 +648,8 @@ void setup(){
   uint32_t battMvVBAT=(uint32_t)lroundf(battV*1000.0f);
 
   // If modem can't power on, still log locally and queue payload.
-  if(!modemPowerOn()){
+  bool modemOk = modemPowerOn();
+  if(!modemOk){
     uint32_t epochNow=(g_epochEstimate>0)?g_epochEstimate:lastGpsEpoch;
     char dailyLine[256];
     snprintf(dailyLine, sizeof(dailyLine),
