@@ -12,7 +12,7 @@
 //   - true  => Serial logging enabled (more power/CPU usage)
 //   - false => Serial logging disabled
 #ifndef PAVEWISE_ENABLE_DEBUG
-#define PAVEWISE_ENABLE_DEBUG true
+#define PAVEWISE_ENABLE_DEBUG false
 #endif
 
 // Serial baud rate when debug logging is enabled.
@@ -25,7 +25,7 @@
 // Expected values: "mm" or "in"
 // Example: #define PAVEWISE_RAIN_UNIT "mm"
 #ifndef PAVEWISE_RAIN_UNIT
-#define PAVEWISE_RAIN_UNIT "mm"
+#define PAVEWISE_RAIN_UNIT "in"
 #endif
 
 // Wake interval (seconds) between deep-sleep cycles.
