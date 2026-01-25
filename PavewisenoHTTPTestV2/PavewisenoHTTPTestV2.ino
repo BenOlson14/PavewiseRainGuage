@@ -590,7 +590,8 @@ static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &dura
   int status=0;
   String response;
   bool ok=httpPostPayload(line, timeoutMs, durationMs, status, response);
-  if(ok) SD.remove(path.c_str());
+  bool stored = response.indexOf("stored") >= 0;
+  if(ok && stored) SD.remove(path.c_str());
   return ok;
 }
 

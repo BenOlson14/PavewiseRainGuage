@@ -827,6 +827,7 @@ static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &dura
   int status = 0;
   String response;
   bool ok = httpPostPayload(line, timeoutMs, durationMs, status, response);
+  bool stored = response.indexOf("stored") >= 0;
   Serial.printf("[HTTP] %s status=%d duration=%lu ms timeout=%lu ms\n",
                 ok ? "OK" : "FAIL",
                 status,
@@ -834,13 +835,17 @@ static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &dura
                 (unsigned long)timeoutMs);
   if (response.length() > 0) {
     Serial.printf("[HTTP] response=%s\n", response.c_str());
-    if (response.indexOf("stored") >= 0) {
+    if (stored) {
       Serial.println("[HTTP] Server response indicates: stored");
     }
   } else {
     Serial.println("[HTTP] response empty");
   }
-  if (ok) SD.remove(path.c_str());
+  if (ok && stored) {
+    SD.remove(path.c_str());
+  } else if (ok && !stored) {
+    Serial.println("[QUEUE] skipping delete: missing stored ack");
+  }
   return ok;
 }
 
