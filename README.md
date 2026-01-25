@@ -209,8 +209,11 @@ reverting to `localhost` only.
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y subversion python3 python3-pip
-svn checkout https://github.com/BenOlson14/PavewiseRainGuage/trunk/server
+sudo apt-get install -y git python3 python3-pip
+REPO_URL="<this-repo-url>"
+git clone --depth 1 --filter=blob:none --sparse "${REPO_URL}" pavewise-rain-gauge
+cd pavewise-rain-gauge
+git sparse-checkout set server
 cd server
 ```
 
@@ -249,8 +252,11 @@ Main server:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y subversion python3 python3-pip
-svn checkout https://github.com/BenOlson14/PavewiseRainGuage/trunk/server
+sudo apt-get install -y git python3 python3-pip
+REPO_URL="<this-repo-url>"
+git clone --depth 1 --filter=blob:none --sparse "${REPO_URL}" pavewise-rain-gauge
+cd pavewise-rain-gauge
+git sparse-checkout set server
 cd server
 sudo bash setup_ec2_server.sh
 ```
@@ -259,8 +265,11 @@ Testing server:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y subversion python3 python3-pip
-svn checkout https://github.com/BenOlson14/PavewiseRainGuage/trunk/server
+sudo apt-get install -y git python3 python3-pip
+REPO_URL="<this-repo-url>"
+git clone --depth 1 --filter=blob:none --sparse "${REPO_URL}" pavewise-rain-gauge
+cd pavewise-rain-gauge
+git sparse-checkout set server
 cd server
 sudo bash setup_ec2_server_test.sh
 ```
