@@ -23,6 +23,10 @@
 #ifndef PAVEWISE_GPS_TIMEOUT_DEFAULT_MS
 #define PAVEWISE_GPS_TIMEOUT_DEFAULT_MS (10UL * 60UL * 1000UL)
 #endif
+#ifndef PAVEWISE_GPS_TIMEOUT_MIN_MS
+// Ensure GPS attempts always run for at least 3 minutes.
+#define PAVEWISE_GPS_TIMEOUT_MIN_MS (3UL * 60UL * 1000UL)
+#endif
 
 // If a fix fails, retry next wake (seconds).
 #ifndef PAVEWISE_GPS_RETRY_SECONDS
@@ -46,6 +50,16 @@
 
 #ifndef PAVEWISE_ENABLE_HTTP
 #define PAVEWISE_ENABLE_HTTP true
+#endif
+
+// Queue preload test (Serial build only):
+// When enabled, the sketch will add a fixed number of synthetic payloads to /queue
+// once per SD card (guarded by a state file) so you can validate queue send logic.
+#ifndef PAVEWISE_QUEUE_PRELOAD_TEST
+#define PAVEWISE_QUEUE_PRELOAD_TEST false
+#endif
+#ifndef PAVEWISE_QUEUE_PRELOAD_COUNT
+#define PAVEWISE_QUEUE_PRELOAD_COUNT 10
 #endif
 
 // Cellular APN settings.
@@ -203,12 +217,15 @@
 static const uint32_t WAKE_INTERVAL_SECONDS = PAVEWISE_WAKE_INTERVAL_SECONDS;
 static const uint32_t GPS_REFRESH_SECONDS   = PAVEWISE_GPS_REFRESH_SECONDS;
 static const uint32_t GPS_TIMEOUT_DEFAULT_MS = PAVEWISE_GPS_TIMEOUT_DEFAULT_MS;
+static const uint32_t GPS_TIMEOUT_MIN_MS     = PAVEWISE_GPS_TIMEOUT_MIN_MS;
 static const uint32_t GPS_RETRY_SECONDS      = PAVEWISE_GPS_RETRY_SECONDS;
 
 static const uint32_t HTTP_TIMEOUT_DEFAULT_MS = PAVEWISE_HTTP_TIMEOUT_DEFAULT_MS;
 static const uint32_t HTTP_TIMEOUT_MAX_MS     = PAVEWISE_HTTP_TIMEOUT_MAX_MS;
 static const uint32_t HTTP_TIMEOUT_MULTIPLIER = PAVEWISE_HTTP_TIMEOUT_MULTIPLIER;
 static const bool ENABLE_HTTP = PAVEWISE_ENABLE_HTTP;
+static const bool QUEUE_PRELOAD_TEST_ENABLED = PAVEWISE_QUEUE_PRELOAD_TEST;
+static const uint8_t QUEUE_PRELOAD_COUNT = PAVEWISE_QUEUE_PRELOAD_COUNT;
 
 static const char APN[]       = PAVEWISE_APN;
 static const char GPRS_USER[] = PAVEWISE_GPRS_USER;
