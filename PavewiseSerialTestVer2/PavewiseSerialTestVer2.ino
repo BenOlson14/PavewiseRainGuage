@@ -1054,6 +1054,8 @@ void setup() {
       uint32_t baseEpoch = epochNow;
       if (baseEpoch == 0 && g_epochEstimate > 0) baseEpoch = g_epochEstimate;
       if (baseEpoch == 0) baseEpoch = (uint32_t)(millis() / 1000UL);
+      lastGpsFixMs = 0;
+      writeUInt32File(FILE_GPS_FIX_MS, lastGpsFixMs);
       gpsRetryEpoch = baseEpoch + GPS_RETRY_SECONDS;
       writeUInt32File(FILE_GPS_RETRY_EPOCH, gpsRetryEpoch);
       Serial.printf("[GPS] FIX FAIL (retry scheduled at epoch %lu)\n",
@@ -1063,6 +1065,8 @@ void setup() {
     uint32_t baseEpoch = epochNow;
     if (baseEpoch == 0 && g_epochEstimate > 0) baseEpoch = g_epochEstimate;
     if (baseEpoch == 0) baseEpoch = (uint32_t)(millis() / 1000UL);
+    lastGpsFixMs = 0;
+    writeUInt32File(FILE_GPS_FIX_MS, lastGpsFixMs);
     gpsRetryEpoch = baseEpoch + GPS_RETRY_SECONDS;
     writeUInt32File(FILE_GPS_RETRY_EPOCH, gpsRetryEpoch);
     Serial.printf("[GPS] retry scheduled at epoch %lu (modem not OK)\n",
