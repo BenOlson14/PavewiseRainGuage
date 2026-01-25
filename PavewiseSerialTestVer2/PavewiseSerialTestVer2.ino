@@ -91,6 +91,8 @@ HttpClient http(gsm, SERVER_HOST, SERVER_PORT);
 DFRobot_RainfallSensor_I2C RainSensor(&Wire);
 
 // ============================= SMALL HELPERS =============================
+// Small delay between queued HTTP sends to avoid back-to-back modem churn.
+static const uint32_t HTTP_QUEUE_SEND_DELAY_MS = 1000;
 
 // Safe elapsed millis calculator (handles wrap naturally).
 static uint32_t elapsedMs(uint32_t startMs) {
@@ -755,6 +757,7 @@ static uint32_t computeHttpTimeoutMs(uint32_t lastHttpMs) {
   return (uint32_t)timeout;
 }
 
+// Normalize queue paths so files always resolve under DIR_QUEUE.
 static String ensureQueuePath(const String &name) {
   if (name.startsWith("/")) return name;
   return String(DIR_QUEUE) + "/" + name;
@@ -766,7 +769,6 @@ static bool httpPostPayload(const String &line, uint32_t timeoutMs, uint32_t &du
   Serial.printf("[HTTP] Attempting POST http://%s:%d%s\n", SERVER_HOST, SERVER_PORT, SERVER_PATH);
   Serial.printf("[HTTP] Payload length: %u bytes\n", (unsigned)line.length());
   uint32_t start = millis();
-  http.connectionKeepAlive();
   http.beginRequest();
   http.post(SERVER_PATH);
   http.sendHeader("Content-Type", "text/plain");
@@ -830,9 +832,9 @@ static void sendAllQueuedFiles(uint32_t &lastHttpMs) {
   dir.close();
   Serial.printf("[QUEUE] %u payload(s) queued\n", (unsigned)files.size());
   std::sort(files.begin(), files.end(), [](const String &a, const String &b) { return a < b; });
-  uint32_t timeoutMs = computeHttpTimeoutMs(lastHttpMs);
   for (auto &p : files) {
     uint32_t durationMs = 0;
+    uint32_t timeoutMs = computeHttpTimeoutMs(lastHttpMs);
     if (!sendQueueFile(p, timeoutMs, durationMs)) {
       if (durationMs > 0) {
         lastHttpMs = durationMs;
@@ -842,6 +844,7 @@ static void sendAllQueuedFiles(uint32_t &lastHttpMs) {
     }
     lastHttpMs = durationMs;
     writeUInt32File(FILE_HTTP_LAST_MS, lastHttpMs);
+    delay(HTTP_QUEUE_SEND_DELAY_MS);
   }
 }
 
@@ -974,7 +977,9 @@ void setup() {
 
   // GPS fix attempt only if modem is up AND GPS is due.
   if (modemOk && needGps) {
+    // Adaptive GPS timeout with a minimum floor so we always search >= 3 minutes.
     uint32_t gpsTimeoutMs = lastGpsFixMs > 0 ? (lastGpsFixMs * 2UL) : GPS_TIMEOUT_DEFAULT_MS;
+    if (gpsTimeoutMs < GPS_TIMEOUT_MIN_MS) gpsTimeoutMs = GPS_TIMEOUT_MIN_MS;
     Serial.printf("[GPS] refresh due; attempting fix (timeout %.1f min)...\n",
                   gpsTimeoutMs / 60000.0f);
 

@@ -66,6 +66,9 @@ HttpClient http(gsm, SERVER_HOST, SERVER_PORT);
 
 DFRobot_RainfallSensor_I2C RainSensor(&Wire);
 
+// Delay between queued HTTP sends to avoid back-to-back modem churn.
+static const uint32_t HTTP_QUEUE_SEND_DELAY_MS = 1000;
+
 static uint32_t elapsedMs(uint32_t startMs){ return (uint32_t)(millis() - startMs); }
 
 // Poll AT until timeout; returns true on first successful response.
@@ -491,6 +494,7 @@ static void writeQueueLine(const String &path,const String &line){
   f.close();
 }
 
+// Normalize queue paths so files always resolve under DIR_QUEUE.
 static String ensureQueuePath(const String &name){
   if(name.startsWith("/")) return name;
   return String(DIR_QUEUE)+"/"+name;
@@ -499,17 +503,16 @@ static String ensureQueuePath(const String &name){
 // Send HTTP payload and measure time spent (used to adapt next timeout).
 static bool httpPostPayload(const String &line, uint32_t timeoutMs, uint32_t &durationMs, int &statusOut, String &responseOut){
   http.setHttpResponseTimeout(timeoutMs);
-  Serial.printf("[HTTP] Attempting POST http://%s:%d%s\n", SERVER_HOST, SERVER_PORT, SERVER_PATH);
-  Serial.printf("[HTTP] Payload length: %u bytes\n", (unsigned)line.length());
+  DBG_PRINTF("[HTTP] Attempting POST http://%s:%d%s\n", SERVER_HOST, SERVER_PORT, SERVER_PATH);
+  DBG_PRINTF("[HTTP] Payload length: %u bytes\n", (unsigned)line.length());
   uint32_t start = millis();
-  http.connectionKeepAlive();
   http.beginRequest();
   http.post(SERVER_PATH);
   http.sendHeader("Content-Type","text/plain");
   http.sendHeader("Content-Length", line.length());
   http.beginBody();
   http.print(line);
-  Serial.println("[HTTP] Payload sent, awaiting response...");
+  DBG_PRINTLN("[HTTP] Payload sent, awaiting response...");
   http.endRequest();
   statusOut = http.responseStatusCode();
   responseOut = http.responseBody();
@@ -530,7 +533,7 @@ static uint32_t computeHttpTimeoutMs(uint32_t lastHttpMs) {
 static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &durationMs){
   File f=SD.open(path, FILE_READ);
   if(!f){
-    Serial.printf("[QUEUE] FAILED to open %s\n", path.c_str());
+    DBG_PRINTF("[QUEUE] FAILED to open %s\n", path.c_str());
     return false;
   }
   String line=f.readStringUntil('\n');
@@ -538,15 +541,15 @@ static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &dura
   f.close();
   int status=0;
   String response;
-  Serial.printf("[QUEUE] sending %s (%u bytes on disk)\n", path.c_str(), (unsigned)fileSize);
+  DBG_PRINTF("[QUEUE] sending %s (%u bytes on disk)\n", path.c_str(), (unsigned)fileSize);
   bool ok=httpPostPayload(line, timeoutMs, durationMs, status, response);
   if (response.length() > 0) {
-    Serial.printf("[HTTP] response=%s\n", response.c_str());
+    DBG_PRINTF("[HTTP] response=%s\n", response.c_str());
     if (response.indexOf("stored") >= 0) {
-      Serial.println("[HTTP] Server response indicates: stored");
+      DBG_PRINTLN("[HTTP] Server response indicates: stored");
     }
   } else {
-    Serial.println("[HTTP] response empty");
+    DBG_PRINTLN("[HTTP] response empty");
   }
   if(ok) SD.remove(path.c_str());
   return ok;
@@ -564,9 +567,8 @@ static void sendAllQueuedFiles(uint32_t &lastHttpMs){
     f.close();
   }
   dir.close();
-  Serial.printf("[QUEUE] %u payload(s) queued\n", (unsigned)files.size());
+  DBG_PRINTF("[QUEUE] %u payload(s) queued\n", (unsigned)files.size());
   std::sort(files.begin(),files.end(),[](const String&a,const String&b){return a<b;});
-  uint32_t timeoutMs = computeHttpTimeoutMs(lastHttpMs);
   for(auto &p:files){
     uint32_t timeoutMs = computeHttpTimeoutMs(lastHttpMs);
     uint32_t durationMs = 0;
@@ -579,6 +581,7 @@ static void sendAllQueuedFiles(uint32_t &lastHttpMs){
     }
     lastHttpMs = durationMs;
     writeUInt32File(FILE_HTTP_LAST_MS, lastHttpMs);
+    delay(HTTP_QUEUE_SEND_DELAY_MS);
   }
 }
 
@@ -686,7 +689,9 @@ void setup(){
     bool hasGpsEpoch = false;
     uint32_t gpsEpoch = 0;
     uint32_t fixTimeMs = 0;
+    // Adaptive GPS timeout with a minimum floor so we always search >= 3 minutes.
     uint32_t gpsTimeoutMs = lastGpsFixMs > 0 ? (lastGpsFixMs * 2UL) : GPS_TIMEOUT_DEFAULT_MS;
+    if (gpsTimeoutMs < GPS_TIMEOUT_MIN_MS) gpsTimeoutMs = GPS_TIMEOUT_MIN_MS;
 
     bool gpsOk = gpsAcquire(gpsTimeoutMs, lat, lon, hasGpsEpoch, gpsEpoch, fixTimeMs);
     if (gpsOk) {
