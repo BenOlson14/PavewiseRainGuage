@@ -1,5 +1,5 @@
 /************************************************************************************
-Pavewise Mobile Rain Gauge — NO-HTTP TEST BUILD (5-minute cadence)
+Pavewise Mobile Rain Gauge — NO-HTTP TEST BUILD (15-minute cadence)
 
 SUMMARY (what this build does every wake):
   1) Boots, downclocks CPU, disables WiFi/BT, mounts SD, and purges old logs
@@ -12,11 +12,11 @@ SUMMARY (what this build does every wake):
        - writes it to a daily CSV log
        - writes it to a queue file
        - DOES NOT send HTTP (ENABLE_HTTP=false)
-  5) Gracefully powers down the modem and deep-sleeps for 5 minutes.
+  5) Gracefully powers down the modem and deep-sleeps for 15 minutes.
 
 This file is the SAME logic as the serial tester build but:
   - HTTP is disabled.
-  - Wake interval is 5 minutes for higher-frequency local logging/testing.
+  - Wake interval matches the serial build for consistent behavior.
 ************************************************************************************/
 
 #define ENABLE_DEBUG 1
@@ -37,7 +37,8 @@ This file is the SAME logic as the serial tester build but:
 #include <ArduinoHttpClient.h>
 #include "DFRobot_RainfallSensor.h"
 
-#define PAVEWISE_WAKE_INTERVAL_SECONDS (5UL * 60UL)
+// Keep the same cadence as the serial/release builds for consistent behavior.
+#define PAVEWISE_WAKE_INTERVAL_SECONDS (15UL * 60UL)
 #define PAVEWISE_ENABLE_HTTP false
 #include "utilities.h"
 
@@ -64,6 +65,9 @@ TinyGsmClient gsm(modem);
 HttpClient http(gsm, SERVER_HOST, SERVER_PORT);
 
 DFRobot_RainfallSensor_I2C RainSensor(&Wire);
+
+// Delay between queued HTTP sends to avoid back-to-back modem churn.
+static const uint32_t HTTP_QUEUE_SEND_DELAY_MS = 1000;
 
 static uint32_t elapsedMs(uint32_t startMs){ return (uint32_t)(millis() - startMs); }
 
@@ -537,6 +541,12 @@ static String makeQueueFilename(uint32_t epoch,uint32_t wakeCounter){
   return String(buf);
 }
 
+// Normalize queue paths so files always resolve under DIR_QUEUE.
+static String ensureQueuePath(const String &name){
+  if(name.startsWith("/")) return name;
+  return String(DIR_QUEUE)+"/"+name;
+}
+
 static void writeQueueLine(const String &path,const String &line){
   File f=SD.open(path, FILE_WRITE);
   if(!f) return;
@@ -546,10 +556,9 @@ static void writeQueueLine(const String &path,const String &line){
 }
 
 // Send HTTP payload and measure time spent (unused when ENABLE_HTTP=false).
-static bool httpPostPayload(const String &line, uint32_t timeoutMs, uint32_t &durationMs, int &statusOut){
+static bool httpPostPayload(const String &line, uint32_t timeoutMs, uint32_t &durationMs, int &statusOut, String &responseOut){
   http.setHttpResponseTimeout(timeoutMs);
   uint32_t start = millis();
-  http.connectionKeepAlive();
   http.beginRequest();
   http.post(SERVER_PATH);
   http.sendHeader("Content-Type","text/plain");
@@ -558,8 +567,9 @@ static bool httpPostPayload(const String &line, uint32_t timeoutMs, uint32_t &du
   http.print(line);
   http.endRequest();
   statusOut=http.responseStatusCode();
-  (void)http.responseBody();
+  responseOut=http.responseBody();
   durationMs = elapsedMs(start);
+  http.stop();
   if (durationMs > timeoutMs) return false;
   return (statusOut>=200 && statusOut<300);
 }
@@ -578,8 +588,10 @@ static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &dura
   String line=f.readStringUntil('\n');
   f.close();
   int status=0;
-  bool ok=httpPostPayload(line, timeoutMs, durationMs, status);
-  if(ok) SD.remove(path.c_str());
+  String response;
+  bool ok=httpPostPayload(line, timeoutMs, durationMs, status, response);
+  bool stored = response.indexOf("stored") >= 0;
+  if(ok && stored) SD.remove(path.c_str());
   return ok;
 }
 
@@ -591,14 +603,14 @@ static void sendAllQueuedFiles(uint32_t &lastHttpMs){
   while(true){
     File f=dir.openNextFile();
     if(!f) break;
-    if(!f.isDirectory()) files.push_back(String(f.name()));
+    if(!f.isDirectory()) files.push_back(ensureQueuePath(String(f.name())));
     f.close();
   }
   dir.close();
   std::sort(files.begin(),files.end(),[](const String&a,const String&b){return a<b;});
-  uint32_t timeoutMs = computeHttpTimeoutMs(lastHttpMs);
   for(auto &p:files){
     uint32_t durationMs = 0;
+    uint32_t timeoutMs = computeHttpTimeoutMs(lastHttpMs);
     if(!sendQueueFile(p, timeoutMs, durationMs)) {
       if (durationMs > 0) {
         lastHttpMs = durationMs;
@@ -608,6 +620,7 @@ static void sendAllQueuedFiles(uint32_t &lastHttpMs){
     }
     lastHttpMs = durationMs;
     writeUInt32File(FILE_HTTP_LAST_MS, lastHttpMs);
+    delay(HTTP_QUEUE_SEND_DELAY_MS);
   }
 }
 
@@ -724,7 +737,9 @@ void setup(){
     bool hasGpsEpoch = false;
     uint32_t gpsEpoch = 0;
     uint32_t fixTimeMs = 0;
+    // Adaptive GPS timeout with a minimum floor so we always search >= 3 minutes.
     uint32_t gpsTimeoutMs = lastGpsFixMs > 0 ? (lastGpsFixMs * 2UL) : GPS_TIMEOUT_DEFAULT_MS;
+    if (gpsTimeoutMs < GPS_TIMEOUT_MIN_MS) gpsTimeoutMs = GPS_TIMEOUT_MIN_MS;
 
     DBG_PRINTF("[GPS] refresh due; attempting fix (timeout %.1f min)...\n",
                gpsTimeoutMs / 60000.0f);
