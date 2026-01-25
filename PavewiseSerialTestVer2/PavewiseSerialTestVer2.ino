@@ -94,8 +94,6 @@ DFRobot_RainfallSensor_I2C RainSensor(&Wire);
 // Small delay between queued HTTP sends to avoid back-to-back modem churn.
 static const uint32_t HTTP_QUEUE_SEND_DELAY_MS = 1000;
 
-static const uint32_t HTTP_QUEUE_SEND_DELAY_MS = 1000;
-
 // Safe elapsed millis calculator (handles wrap naturally).
 static uint32_t elapsedMs(uint32_t startMs) {
   return (uint32_t)(millis() - startMs);
@@ -765,6 +763,34 @@ static String ensureQueuePath(const String &name) {
   return String(DIR_QUEUE) + "/" + name;
 }
 
+// Serial-only queue preload test guard (one-time per SD card).
+static const char *FILE_QUEUE_PRELOAD_DONE = "/state/queue_preload_done.txt";
+
+// Optionally preload synthetic payloads into /queue to validate queue sends.
+static void preloadQueueTestPayloads(uint32_t epochNow, const String &imei, uint32_t battMvVBAT) {
+  if (!QUEUE_PRELOAD_TEST_ENABLED) return;
+  if (SD.exists(FILE_QUEUE_PRELOAD_DONE)) return;
+  if (epochNow == 0) epochNow = g_wakeCounter;
+
+  Serial.printf("[QUEUE] preload test enabled: adding %u payloads\n",
+                (unsigned)QUEUE_PRELOAD_COUNT);
+  for (uint8_t i = 0; i < QUEUE_PRELOAD_COUNT; i++) {
+    uint32_t fakeEpoch = epochNow - (uint32_t)(i + 1) * 60UL;
+    String payload = buildUploadPayload(
+      imei,
+      battMvVBAT,
+      0.0f,
+      fakeEpoch,
+      false,
+      0.0,
+      0.0
+    );
+    String qPath = makeQueueFilename(fakeEpoch, g_wakeCounter + i + 1);
+    writeQueueLine(qPath, payload);
+  }
+  writeTextFile(FILE_QUEUE_PRELOAD_DONE, "1");
+}
+
 // Send HTTP payload and measure time spent (used to adapt next timeout).
 static bool httpPostPayload(const String &line, uint32_t timeoutMs, uint32_t &durationMs, int &statusOut, String &responseOut) {
   http.setHttpResponseTimeout(timeoutMs);
@@ -1092,6 +1118,9 @@ void setup() {
   String qPath = makeQueueFilename(epochNow ? epochNow : g_wakeCounter, g_wakeCounter);
   writeQueueLine(qPath, payload);
   Serial.printf("[QUEUE] wrote %s\n", qPath.c_str());
+
+  // Optional queue preload test before sending.
+  preloadQueueTestPayloads(epochNow, imei, battMvVBAT);
 
   // Attempt HTTP sending for queued files (if enabled and network OK).
   if (ENABLE_HTTP) {

@@ -52,6 +52,16 @@
 #define PAVEWISE_ENABLE_HTTP true
 #endif
 
+// Queue preload test (Serial build only):
+// When enabled, the sketch will add a fixed number of synthetic payloads to /queue
+// once per SD card (guarded by a state file) so you can validate queue send logic.
+#ifndef PAVEWISE_QUEUE_PRELOAD_TEST
+#define PAVEWISE_QUEUE_PRELOAD_TEST false
+#endif
+#ifndef PAVEWISE_QUEUE_PRELOAD_COUNT
+#define PAVEWISE_QUEUE_PRELOAD_COUNT 10
+#endif
+
 // Cellular APN settings.
 #ifndef PAVEWISE_APN
 #define PAVEWISE_APN "hologram"
@@ -214,6 +224,8 @@ static const uint32_t HTTP_TIMEOUT_DEFAULT_MS = PAVEWISE_HTTP_TIMEOUT_DEFAULT_MS
 static const uint32_t HTTP_TIMEOUT_MAX_MS     = PAVEWISE_HTTP_TIMEOUT_MAX_MS;
 static const uint32_t HTTP_TIMEOUT_MULTIPLIER = PAVEWISE_HTTP_TIMEOUT_MULTIPLIER;
 static const bool ENABLE_HTTP = PAVEWISE_ENABLE_HTTP;
+static const bool QUEUE_PRELOAD_TEST_ENABLED = PAVEWISE_QUEUE_PRELOAD_TEST;
+static const uint8_t QUEUE_PRELOAD_COUNT = PAVEWISE_QUEUE_PRELOAD_COUNT;
 
 static const char APN[]       = PAVEWISE_APN;
 static const char GPRS_USER[] = PAVEWISE_GPRS_USER;
