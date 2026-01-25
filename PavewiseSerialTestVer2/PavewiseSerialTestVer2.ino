@@ -94,6 +94,8 @@ DFRobot_RainfallSensor_I2C RainSensor(&Wire);
 // Small delay between queued HTTP sends to avoid back-to-back modem churn.
 static const uint32_t HTTP_QUEUE_SEND_DELAY_MS = 1000;
 
+static const uint32_t HTTP_QUEUE_SEND_DELAY_MS = 1000;
+
 // Safe elapsed millis calculator (handles wrap naturally).
 static uint32_t elapsedMs(uint32_t startMs) {
   return (uint32_t)(millis() - startMs);
