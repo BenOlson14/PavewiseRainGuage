@@ -77,30 +77,22 @@ POWER STRATEGY (SOFTWARE-ONLY):
 #define PAVEWISE_ENABLE_HTTP true
 #include "utilities.h"
 
-#if PAVEWISE_ENABLE_DEBUG
-  #if defined(ARDUINO_ARCH_ESP32)
-    #define DBG_BEGIN()       do{ \
-      Serial.begin(DEBUG_BAUD); \
-      delay(200); \
-      Serial.setTxBufferSize(2048); \
-    }while(0)
-  #else
-    #define DBG_BEGIN()       do{ \
-      Serial.begin(DEBUG_BAUD); \
-      delay(200); \
-    }while(0)
-  #endif
-  #define DBG_PRINT(x)      Serial.print(x)
-  #define DBG_PRINTLN(x)    Serial.println(x)
-  #define DBG_PRINTF(...)   Serial.printf(__VA_ARGS__)
-  #define DBG_FLUSH()       Serial.flush()
+#if defined(ARDUINO_ARCH_ESP32)
+  #define DBG_BEGIN()       do{ \
+    Serial.begin(DEBUG_BAUD); \
+    delay(200); \
+    Serial.setTxBufferSize(2048); \
+  }while(0)
 #else
-  #define DBG_BEGIN()       do{}while(0)
-  #define DBG_PRINT(x)      do{}while(0)
-  #define DBG_PRINTLN(x)    do{}while(0)
-  #define DBG_PRINTF(...)   do{}while(0)
-  #define DBG_FLUSH()       do{}while(0)
+  #define DBG_BEGIN()       do{ \
+    Serial.begin(DEBUG_BAUD); \
+    delay(200); \
+  }while(0)
 #endif
+#define DBG_PRINT(x)      Serial.print(x)
+#define DBG_PRINTLN(x)    Serial.println(x)
+#define DBG_PRINTF(...)   Serial.printf(__VA_ARGS__)
+#define DBG_FLUSH()       Serial.flush()
 
 // ============================= RTC STATE =============================
 // Survives deep sleep, NOT battery removal.

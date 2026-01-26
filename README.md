@@ -361,7 +361,7 @@ Use the values in `connection_details.txt` to update:
 `PAVEWISE_SERVER_HOST/PORT/PATH` values.
 
 Additional device options you can adjust:
-- `PAVEWISE_ENABLE_DEBUG` to toggle Serial logging.
+- `PAVEWISE_DEBUG_BAUD` to set the Serial logging baud rate.
 - `PAVEWISE_RAIN_UNIT` to choose `"mm"` or `"in"` for reported rainfall (sent once on
   the first successful upload for each IMEI).
   - If the server does not recognize the IMEI and the unit was not included, it
@@ -391,7 +391,7 @@ Device reporting units are stored in the `device_rain_units` table (keyed by IME
 - Start with **`PavewisenoHTTPTestV2.ino`** to validate SD/GPS/modem without HTTP.
 - Move to **`PavewiseSerialTestVer2.ino`** to validate HTTP and queue behavior.
 - Deploy **`PavewiseSerialTestVer2.ino`** for field use (minimal serial overhead).
-- If you enable `PAVEWISE_ENABLE_DEBUG`, expect longer wake times and higher UART/power
+- Serial logging is always enabled; expect longer wake times and higher UART/power
   usage due to Serial I/O.
 
 ## Troubleshooting tips
