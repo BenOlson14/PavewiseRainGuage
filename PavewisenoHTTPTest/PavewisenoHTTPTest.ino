@@ -42,7 +42,14 @@ This file is the SAME logic as the serial tester build but:
 #include "utilities.h"
 
 #if PAVEWISE_ENABLE_DEBUG
-  #define DBG_BEGIN()       do{ Serial.begin(DEBUG_BAUD); delay(200);}while(0)
+  #define DBG_BEGIN()       do{ \
+    Serial.begin(DEBUG_BAUD); \
+    delay(200); \
+    #if defined(ARDUINO_ARCH_ESP32) \
+      Serial.setTxBufferSize(2048); \
+      Serial.setTxTimeoutMs(0); \
+    #endif \
+  }while(0)
   #define DBG_PRINT(x)      Serial.print(x)
   #define DBG_PRINTLN(x)    Serial.println(x)
   #define DBG_PRINTF(...)   Serial.printf(__VA_ARGS__)
@@ -67,6 +74,8 @@ DFRobot_RainfallSensor_I2C RainSensor(&Wire);
 
 // Delay between queued HTTP sends to avoid back-to-back modem churn.
 static const uint32_t HTTP_QUEUE_SEND_DELAY_MS = 1000;
+// Time to wait for +CGPSINFO responses (ms).
+static const uint32_t GPS_INFO_WAIT_MS = 2500;
 
 static uint32_t elapsedMs(uint32_t startMs){ return (uint32_t)(millis() - startMs); }
 
@@ -564,11 +573,16 @@ static bool gpsAcquire(uint32_t timeoutMs,
     fixTimeMsOut = elapsedMs(start);
     return false;
   }
+  // Allow GNSS to settle so GPS queries aren't timing-sensitive to debug logging.
+  delay(300);
+  drainModemSerial();
   uint32_t lastProgress = 0;
   while(elapsedMs(start)<timeoutMs){
+    drainModemSerial();
     modem.sendAT("+CGPSINFO");
     String out;
-    int r=modem.waitResponse(1200,out);
+    out.reserve(256);
+    int r=modem.waitResponse(GPS_INFO_WAIT_MS,out);
     if(r==1 && out.indexOf("+CGPSINFO")>=0){
       if(parseCgpsInfo(out,latOut,lonOut,hasEpoch,epochOut)){
         modem.sendAT("+CGPS=0"); modem.waitResponse(1000);

@@ -79,7 +79,14 @@ POWER STRATEGY (SOFTWARE-ONLY):
 #include "utilities.h"
 
 #if PAVEWISE_ENABLE_DEBUG
-  #define DBG_BEGIN()       do{ Serial.begin(DEBUG_BAUD); delay(200);}while(0)
+  #define DBG_BEGIN()       do{ \
+    Serial.begin(DEBUG_BAUD); \
+    delay(200); \
+    #if defined(ARDUINO_ARCH_ESP32) \
+      Serial.setTxBufferSize(2048); \
+      Serial.setTxTimeoutMs(0); \
+    #endif \
+  }while(0)
   #define DBG_PRINT(x)      Serial.print(x)
   #define DBG_PRINTLN(x)    Serial.println(x)
   #define DBG_PRINTF(...)   Serial.printf(__VA_ARGS__)
@@ -113,6 +120,8 @@ DFRobot_RainfallSensor_I2C RainSensor(&Wire);
 static const uint32_t HTTP_QUEUE_SEND_DELAY_MS = 1000;
 // Maximum number of per-cycle retries for invalid payloads before deleting queue entry.
 static const uint8_t HTTP_QUEUE_INVALID_RETRY_CYCLES = 10;
+// Time to wait for +CGPSINFO responses (ms).
+static const uint32_t GPS_INFO_WAIT_MS = 2500;
 
 // Safe elapsed millis calculator (handles wrap naturally).
 static uint32_t elapsedMs(uint32_t startMs) {
@@ -769,14 +778,19 @@ static bool gpsAcquire(uint32_t timeoutMs,
     fixTimeMsOut = elapsedMs(start);
     return false;
   }
+  // Allow GNSS to settle so GPS queries aren't timing-sensitive to debug logging.
+  delay(300);
+  drainModemSerial();
 
   uint32_t lastProgress = 0;
   while (elapsedMs(start) < timeoutMs) {
     // Ask for GPS info.
+    drainModemSerial();
     modem.sendAT("+CGPSINFO");
 
     String out;
-    int r = modem.waitResponse(1200, out);
+    out.reserve(256);
+    int r = modem.waitResponse(GPS_INFO_WAIT_MS, out);
 
     // If we got a response containing +CGPSINFO, attempt parse.
     if (r == 1 && out.indexOf("+CGPSINFO") >= 0) {
