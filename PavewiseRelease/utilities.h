@@ -256,6 +256,10 @@
 #define PAVEWISE_FILE_HTTP_LAST_MS "/state/http_last_ms.txt"
 #endif
 
+#ifndef PAVEWISE_FILE_BOOT_COUNTER
+#define PAVEWISE_FILE_BOOT_COUNTER "/state/boot_counter.txt"
+#endif
+
 // ============================= CONFIG CONSTANTS =============================
 
 static const bool ENABLE_DEBUG = PAVEWISE_ENABLE_DEBUG;
