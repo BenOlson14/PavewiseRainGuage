@@ -84,7 +84,6 @@ POWER STRATEGY (SOFTWARE-ONLY):
       Serial.begin(DEBUG_BAUD); \
       delay(200); \
       Serial.setTxBufferSize(2048); \
-      Serial.setTxTimeoutMs(0); \
     }while(0)
   #else
     #define DBG_BEGIN()       do{ \
