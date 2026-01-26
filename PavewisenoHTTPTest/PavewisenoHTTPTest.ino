@@ -41,26 +41,18 @@ This file is the SAME logic as the serial tester build but:
 #define PAVEWISE_ENABLE_HTTP false
 #include "utilities.h"
 
-#if PAVEWISE_ENABLE_DEBUG
-  #define DBG_BEGIN()       do{ \
-    Serial.begin(DEBUG_BAUD); \
-    delay(200); \
-    #if defined(ARDUINO_ARCH_ESP32) \
-      Serial.setTxBufferSize(2048); \
-      Serial.setTxTimeoutMs(0); \
-    #endif \
-  }while(0)
-  #define DBG_PRINT(x)      Serial.print(x)
-  #define DBG_PRINTLN(x)    Serial.println(x)
-  #define DBG_PRINTF(...)   Serial.printf(__VA_ARGS__)
-  #define DBG_FLUSH()       Serial.flush()
-#else
-  #define DBG_BEGIN()       do{}while(0)
-  #define DBG_PRINT(x)      do{}while(0)
-  #define DBG_PRINTLN(x)    do{}while(0)
-  #define DBG_PRINTF(...)   do{}while(0)
-  #define DBG_FLUSH()       do{}while(0)
-#endif
+#define DBG_BEGIN()       do{ \
+  Serial.begin(DEBUG_BAUD); \
+  delay(200); \
+  #if defined(ARDUINO_ARCH_ESP32) \
+    Serial.setTxBufferSize(2048); \
+    Serial.setTxTimeoutMs(0); \
+  #endif \
+}while(0)
+#define DBG_PRINT(x)      Serial.print(x)
+#define DBG_PRINTLN(x)    Serial.println(x)
+#define DBG_PRINTF(...)   Serial.printf(__VA_ARGS__)
+#define DBG_FLUSH()       Serial.flush()
 
 RTC_DATA_ATTR uint32_t g_wakeCounter   = 0;
 RTC_DATA_ATTR uint32_t g_epochEstimate = 0;

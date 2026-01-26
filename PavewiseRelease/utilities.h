@@ -7,15 +7,7 @@
 // All user-configurable settings live in this file so you can adjust APN,
 // server details, timing, and pin mappings without editing the main sketches.
 
-// Debug serial logging.
-// Example: #define PAVEWISE_ENABLE_DEBUG true
-//   - true  => Serial logging enabled (more power/CPU usage)
-//   - false => Serial logging disabled
-#ifndef PAVEWISE_ENABLE_DEBUG
-#define PAVEWISE_ENABLE_DEBUG false
-#endif
-
-// Serial baud rate when debug logging is enabled.
+// Serial baud rate for debug logging.
 // Example: #define PAVEWISE_DEBUG_BAUD 115200
 #ifndef PAVEWISE_DEBUG_BAUD
 #define PAVEWISE_DEBUG_BAUD 115200
@@ -262,7 +254,6 @@
 
 // ============================= CONFIG CONSTANTS =============================
 
-static const bool ENABLE_DEBUG = PAVEWISE_ENABLE_DEBUG;
 static const uint32_t DEBUG_BAUD = PAVEWISE_DEBUG_BAUD;
 static const char RAIN_UNIT[] = PAVEWISE_RAIN_UNIT;
 
