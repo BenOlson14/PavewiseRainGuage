@@ -1,7 +1,9 @@
 import logging
 import os
+import re
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import psycopg2
@@ -40,8 +42,38 @@ def _normalize_unit(raw_unit: str | None) -> str | None:
     return unit
 
 
+@dataclass(frozen=True)
+class PayloadError(Exception):
+    message: str
+    field: str
+
+
+_IMEI_RE = re.compile(r"^\d{15}$")
+
+
+def _require_int(value: str, field: str, allow_negative: bool = False) -> int:
+    """Parse an integer with strict format checks."""
+    token = value.strip()
+    if not token:
+        raise PayloadError("Missing value", field)
+    if allow_negative:
+        if token[0] == "-":
+            if not token[1:].isdigit():
+                raise PayloadError("Expected signed integer", field)
+        elif not token.isdigit():
+            raise PayloadError("Expected signed integer", field)
+    elif not token.isdigit():
+        raise PayloadError("Expected integer", field)
+    return int(token)
+
+
+def _validate_imei(imei: str) -> None:
+    if not _IMEI_RE.match(imei):
+        raise PayloadError("Expected 15-digit IMEI", "imei")
+
+
 def parse_payload(raw_payload: str) -> dict:
-    """Decode the compact payload into typed values."""
+    """Decode the compact payload into typed values with strict format checks."""
     # Trim and split on the compact delimiter. Empty segments are discarded.
     parts = [part.strip() for part in raw_payload.strip().split("|") if part.strip()]
     if len(parts) not in (4, 5, 6, 7):
@@ -50,9 +82,10 @@ def parse_payload(raw_payload: str) -> dict:
         )
 
     imei = parts[0]
-    batt_mv = int(parts[1])
-    rain_x100 = int(parts[2])
-    epoch_seconds = int(parts[3])
+    _validate_imei(imei)
+    batt_mv = _require_int(parts[1], "batt_mv")
+    rain_x100 = _require_int(parts[2], "rain_x100")
+    epoch_seconds = _require_int(parts[3], "epoch_seconds")
 
     unit = None
     lat_deg = None
@@ -62,16 +95,32 @@ def parse_payload(raw_payload: str) -> dict:
     # Optional unit token (mm/in) can be sent once, or whenever it changes.
     if len(parts) in (5, 7):
         unit = _normalize_unit(parts[4])
+        if unit is None:
+            raise PayloadError("Invalid unit token", "rain_unit")
 
     # GPS coordinates are only present when the device refreshes GNSS.
     if len(parts) == 6:
-        lat_deg = int(parts[4]) / 1e7
-        lon_deg = int(parts[5]) / 1e7
+        lat_deg = _require_int(parts[4], "lat_deg", allow_negative=True) / 1e7
+        lon_deg = _require_int(parts[5], "lon_deg", allow_negative=True) / 1e7
         has_gps = True
     elif len(parts) == 7:
-        lat_deg = int(parts[5]) / 1e7
-        lon_deg = int(parts[6]) / 1e7
+        lat_deg = _require_int(parts[5], "lat_deg", allow_negative=True) / 1e7
+        lon_deg = _require_int(parts[6], "lon_deg", allow_negative=True) / 1e7
         has_gps = True
+
+    if batt_mv < 0 or batt_mv > 8000:
+        raise PayloadError("Battery millivolts out of range", "batt_mv")
+    if rain_x100 < 0:
+        raise PayloadError("Rain amount must be non-negative", "rain_x100")
+    if epoch_seconds < 0:
+        raise PayloadError("Epoch seconds must be non-negative", "epoch_seconds")
+    if has_gps:
+        if lat_deg is None or lon_deg is None:
+            raise PayloadError("Missing GPS coordinates", "gps")
+        if not (-90.0 <= lat_deg <= 90.0):
+            raise PayloadError("Latitude out of range", "lat_deg")
+        if not (-180.0 <= lon_deg <= 180.0):
+            raise PayloadError("Longitude out of range", "lon_deg")
 
     return {
         "imei": imei,
@@ -137,7 +186,14 @@ def ingest():
     if len(unit_parts) == 2:
         unit = _normalize_unit(unit_parts[1])
         if unit is None:
-            return jsonify({"error": "Invalid unit payload"}), 400
+            return jsonify({"error": "Invalid unit payload", "code": "invalid_payload"}), 400
+        try:
+            _validate_imei(unit_parts[0])
+        except PayloadError as exc:
+            return (
+                jsonify({"error": exc.message, "code": "invalid_payload", "field": exc.field}),
+                400,
+            )
         try:
             with get_db_conn() as conn:
                 with conn.cursor() as cur:
@@ -158,9 +214,15 @@ def ingest():
 
     try:
         parsed = parse_payload(payload)
+    except PayloadError as exc:
+        app.logger.warning("ingest_parse_error payload=%s error=%s field=%s", payload, exc, exc.field)
+        return (
+            jsonify({"error": exc.message, "code": "invalid_payload", "field": exc.field}),
+            400,
+        )
     except ValueError as exc:
         app.logger.warning("ingest_parse_error payload=%s error=%s", payload, exc)
-        return jsonify({"error": str(exc)}), 400
+        return jsonify({"error": str(exc), "code": "invalid_payload"}), 400
 
     app.logger.info("ingest_request payload=%s", payload)
     app.logger.info("ingest_parsed payload=%s parsed=%s", payload, parsed)

@@ -36,6 +36,7 @@ DATA STORAGE STRATEGY:
   - /state/gps_retry_epoch.txt    (next epoch to retry GPS after a failure)
   - /state/http_last_ms.txt       (last HTTP send duration in ms)
   - /state/identity.txt           (cached ICCID, IMEI so identity survives power loss)
+  - /state/queue_retry_*.txt      (retry counters for invalid payloads)
 
 TIME STRATEGY:
   - g_epochEstimate stored in RTC memory survives deep sleep.
@@ -108,10 +109,46 @@ DFRobot_RainfallSensor_I2C RainSensor(&Wire);
 // ============================= SMALL HELPERS =============================
 // Small delay between queued HTTP sends to avoid back-to-back modem churn.
 static const uint32_t HTTP_QUEUE_SEND_DELAY_MS = 1000;
+// Maximum number of per-cycle retries for invalid payloads before deleting queue entry.
+static const uint8_t HTTP_QUEUE_INVALID_RETRY_CYCLES = 10;
 
 // Safe elapsed millis calculator (handles wrap naturally).
 static uint32_t elapsedMs(uint32_t startMs) {
   return (uint32_t)(millis() - startMs);
+}
+
+static bool isValidImei(const String &imei) {
+  if (imei.length() != 15) return false;
+  for (size_t i = 0; i < imei.length(); i++) {
+    if (!isDigit(imei[i])) return false;
+  }
+  return true;
+}
+
+static void drainModemSerial(uint32_t durationMs = 150) {
+  uint32_t start = millis();
+  while (elapsedMs(start) < durationMs) {
+    while (SerialAT.available()) {
+      SerialAT.read();
+    }
+    delay(10);
+  }
+}
+
+static String readModemImei(uint8_t attempts = 3) {
+  for (uint8_t i = 0; i < attempts; i++) {
+    drainModemSerial();
+    String imei = modem.getIMEI();
+    imei.trim();
+    if (isValidImei(imei)) {
+      return imei;
+    }
+    if (imei.length()) {
+      DBG_PRINTF("[MODEM] IMEI read invalid (attempt %u): %s\n", (unsigned)(i + 1), imei.c_str());
+    }
+    delay(200);
+  }
+  return String();
 }
 
 // Poll AT until timeout; returns true on first successful response.
@@ -309,12 +346,12 @@ static bool loadIdentity(String &iccid, String &imei) {
 
   iccid = line.substring(0, c); iccid.trim();
   imei  = line.substring(c + 1); imei.trim();
-  return (iccid.length() > 0 && imei.length() > 0);
+  return (iccid.length() > 0 && isValidImei(imei));
 }
 
 // Save identity cache.
 static void saveIdentity(const String &iccid, const String &imei) {
-  if (iccid.length() == 0 || imei.length() == 0) return;
+  if (iccid.length() == 0 || !isValidImei(imei)) return;
   writeTextFile(FILE_IDENTITY, iccid + "," + imei);
 }
 
@@ -569,10 +606,14 @@ static bool connectNetwork(String &iccid, String &imei, int &rssi) {
 #endif
 
   String tIccid = modem.getSimCCID();
-  String tImei  = modem.getIMEI();
+  String tImei  = readModemImei();
 
   if (tIccid.length()) iccid = tIccid;
-  if (tImei.length())  imei  = tImei;
+  if (tImei.length() && isValidImei(tImei)) {
+    imei = tImei;
+  } else if (tImei.length()) {
+    DBG_PRINTF("[MODEM] IMEI read invalid: %s\n", tImei.c_str());
+  }
 
   DBG_PRINTF("[MODEM] ICCID: %s\n", iccid.c_str());
   DBG_PRINTF("[MODEM] IMEI : %s\n", imei.c_str());
@@ -816,6 +857,37 @@ static String extractImeiFromPayload(const String &payload) {
   return payload.substring(0, sep);
 }
 
+static String queueRetryStatePath(const String &queuePath) {
+  String base = queuePath;
+  int slash = base.lastIndexOf('/');
+  if (slash >= 0) {
+    base = base.substring(slash + 1);
+  }
+  return String(DIR_STATE) + "/queue_retry_" + base;
+}
+
+static uint32_t readQueueRetryCount(const String &queuePath) {
+  String statePath = queueRetryStatePath(queuePath);
+  uint32_t count = 0;
+  readUInt32File(statePath.c_str(), count);
+  return count;
+}
+
+static uint32_t incrementQueueRetryCount(const String &queuePath) {
+  String statePath = queueRetryStatePath(queuePath);
+  uint32_t count = readQueueRetryCount(queuePath);
+  count += 1;
+  writeUInt32File(statePath.c_str(), count);
+  return count;
+}
+
+static void clearQueueRetryState(const String &queuePath) {
+  String statePath = queueRetryStatePath(queuePath);
+  if (SD.exists(statePath.c_str())) {
+    SD.remove(statePath.c_str());
+  }
+}
+
 // Normalize queue paths so files always resolve under DIR_QUEUE.
 static String ensureQueuePath(const String &name) {
   if (name.startsWith("/")) return name;
@@ -873,6 +945,10 @@ static bool httpPostPayload(const String &line, uint32_t timeoutMs, uint32_t &du
   return (statusOut >= 200 && statusOut < 300);
 }
 
+static bool responseIndicatesInvalidPayload(int status, const String &response) {
+  return status == 400 && response.indexOf("\"code\":\"invalid_payload\"") >= 0;
+}
+
 // Send a single queued file (delete only on success).
 static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &durationMs, bool &unitSent) {
   File f = SD.open(path, FILE_READ);
@@ -889,6 +965,7 @@ static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &dura
   bool ok = httpPostPayload(line, timeoutMs, durationMs, status, response);
   bool stored = response.indexOf("stored") >= 0;
   bool unitRequired = response.indexOf("unit_required") >= 0;
+  bool invalidPayload = responseIndicatesInvalidPayload(status, response);
   DBG_PRINTF("[HTTP] %s status=%d duration=%lu ms timeout=%lu ms\n",
                 ok ? "OK" : "FAIL",
                 status,
@@ -902,7 +979,22 @@ static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &dura
   } else {
     DBG_PRINTLN("[HTTP] response empty");
   }
-  if (!stored && unitRequired) {
+  if (!stored && invalidPayload) {
+    DBG_PRINTLN("[QUEUE] invalid payload response; retrying once");
+    uint32_t retryDuration = 0;
+    int retryStatus = 0;
+    String retryResponse;
+    bool retryOk = httpPostPayload(line, timeoutMs, retryDuration, retryStatus, retryResponse);
+    bool retryStored = retryResponse.indexOf("stored") >= 0;
+    bool retryInvalidPayload = responseIndicatesInvalidPayload(retryStatus, retryResponse);
+    durationMs = retryDuration;
+    status = retryStatus;
+    response = retryResponse;
+    ok = retryOk;
+    stored = retryStored;
+    invalidPayload = retryInvalidPayload;
+  }
+  if (!stored && unitRequired && !invalidPayload) {
     String imei = extractImeiFromPayload(line);
     if (imei.length()) {
       String unitPayload = buildUnitPayload(imei);
@@ -922,6 +1014,7 @@ static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &dura
         durationMs = retryDuration;
         if (retryOk && retryStored) {
           SD.remove(path.c_str());
+          clearQueueRetryState(path);
           return true;
         }
       }
@@ -933,6 +1026,19 @@ static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &dura
       writeBoolFile(FILE_RAIN_UNIT_SENT, true);
     }
     SD.remove(path.c_str());
+    clearQueueRetryState(path);
+  } else if (invalidPayload) {
+    uint32_t retryCount = incrementQueueRetryCount(path);
+    DBG_PRINTF("[QUEUE] invalid payload retry %lu/%u\n",
+               (unsigned long)retryCount,
+               HTTP_QUEUE_INVALID_RETRY_CYCLES);
+    if (retryCount >= HTTP_QUEUE_INVALID_RETRY_CYCLES) {
+      DBG_PRINTF("[QUEUE] dropping invalid payload after %lu cycles: %s\n",
+                 (unsigned long)retryCount, path.c_str());
+      SD.remove(path.c_str());
+      clearQueueRetryState(path);
+      return true;
+    }
   } else if (ok && !stored) {
     DBG_PRINTLN("[QUEUE] skipping delete: missing stored ack");
   }
