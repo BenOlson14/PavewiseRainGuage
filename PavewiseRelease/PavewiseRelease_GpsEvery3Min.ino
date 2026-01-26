@@ -97,6 +97,7 @@ POWER STRATEGY (SOFTWARE-ONLY):
 
 RTC_DATA_ATTR uint32_t g_wakeCounter   = 0;
 RTC_DATA_ATTR uint32_t g_epochEstimate = 0;
+RTC_DATA_ATTR uint32_t g_bootCounter   = 0;
 
 // ============================= MODEM + SENSOR OBJECTS =============================
 
@@ -897,6 +898,7 @@ static String ensureQueuePath(const String &name) {
 
 // Serial-only queue preload test guard (one-time per SD card).
 static const char *FILE_QUEUE_PRELOAD_DONE = "/state/queue_preload_done.txt";
+static const char *FILE_BOOT_COUNTER = PAVEWISE_FILE_BOOT_COUNTER;
 
 // Optionally preload synthetic payloads into /queue to validate queue sends.
 static void preloadQueueTestPayloads(uint32_t epochNow, const String &imei, uint32_t battMvVBAT) {
@@ -1127,6 +1129,17 @@ void setup() {
   }
   purgeLogsIfNeeded();
 
+  // Detect cold boot (power loss) by comparing RTC boot counter with SD state.
+  uint32_t bootCounterStored = 0;
+  readUInt32File(FILE_BOOT_COUNTER, bootCounterStored);
+  bool coldBoot = (g_bootCounter == 0 || g_bootCounter != bootCounterStored);
+  if (coldBoot) {
+    bootCounterStored = bootCounterStored + 1;
+    writeUInt32File(FILE_BOOT_COUNTER, bootCounterStored);
+    g_bootCounter = bootCounterStored;
+  }
+  DBG_PRINTF("[BOOT] cold boot detected: %s\n", coldBoot ? "YES" : "NO");
+
   // Load cached identity so we can still build payload even if modem fails.
   String iccid = "unknown";
   String imei  = "unknown";
@@ -1197,7 +1210,8 @@ void setup() {
   //  - or older than 6 hours
   //  - or a retry interval was scheduled
   bool gpsRetryDue = (gpsRetryEpoch > 0) && (epochNow >= gpsRetryEpoch);
-  bool needGps = (!haveValidEpoch) ||
+  bool needGps = coldBoot ||
+                 (!haveValidEpoch) ||
                  (lastGpsEpoch == 0) ||
                  (epochNow >= lastGpsEpoch && (epochNow - lastGpsEpoch) >= GPS_REFRESH_SECONDS) ||
                  gpsRetryDue ||
