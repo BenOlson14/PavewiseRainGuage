@@ -70,6 +70,40 @@ static const uint32_t HTTP_QUEUE_SEND_DELAY_MS = 1000;
 
 static uint32_t elapsedMs(uint32_t startMs){ return (uint32_t)(millis() - startMs); }
 
+static bool isValidImei(const String &imei) {
+  if (imei.length() != 15) return false;
+  for (size_t i = 0; i < imei.length(); i++) {
+    if (!isDigit(imei[i])) return false;
+  }
+  return true;
+}
+
+static void drainModemSerial(uint32_t durationMs = 150) {
+  uint32_t start = millis();
+  while (elapsedMs(start) < durationMs) {
+    while (SerialAT.available()) {
+      SerialAT.read();
+    }
+    delay(10);
+  }
+}
+
+static String readModemImei(uint8_t attempts = 3) {
+  for (uint8_t i = 0; i < attempts; i++) {
+    drainModemSerial();
+    String imei = modem.getIMEI();
+    imei.trim();
+    if (isValidImei(imei)) {
+      return imei;
+    }
+    if (imei.length()) {
+      DBG_PRINTF("[MODEM] IMEI read invalid (attempt %u): %s\n", (unsigned)(i + 1), imei.c_str());
+    }
+    delay(200);
+  }
+  return String();
+}
+
 // Poll AT until timeout; returns true on first successful response.
 static bool waitForAtResponsive(uint32_t timeoutMs) {
   uint32_t start = millis();
@@ -250,11 +284,11 @@ static bool loadIdentity(String &iccid, String &imei) {
   if (c < 0) return false;
   iccid = line.substring(0, c); iccid.trim();
   imei  = line.substring(c + 1); imei.trim();
-  return (iccid.length() > 0 && imei.length() > 0);
+  return (iccid.length() > 0 && isValidImei(imei));
 }
 
 static void saveIdentity(const String &iccid, const String &imei) {
-  if (iccid.length() == 0 || imei.length() == 0) return;
+  if (iccid.length() == 0 || !isValidImei(imei)) return;
   writeTextFile(FILE_IDENTITY, iccid + "," + imei);
 }
 
@@ -413,7 +447,12 @@ static bool connectNetwork(String &iccid,String &imei,int &rssi) {
   delay(200);
 #endif
   String tIccid=modem.getSimCCID(); if(tIccid.length()) iccid=tIccid;
-  String tImei =modem.getIMEI();    if(tImei.length())  imei=tImei;
+  String tImei = readModemImei();
+  if (tImei.length() && isValidImei(tImei)) {
+    imei = tImei;
+  } else if (tImei.length()) {
+    DBG_PRINTF("[MODEM] IMEI read invalid: %s\n", tImei.c_str());
+  }
   DBG_PRINTF("[MODEM] ICCID: %s\n", iccid.c_str());
   DBG_PRINTF("[MODEM] IMEI : %s\n", imei.c_str());
   DBG_PRINT("[MODEM] Modem Info: ");
