@@ -1,5 +1,5 @@
 /************************************************************************************
-Pavewise Mobile Rain Gauge — GPS/STRING TEST BUILD (TestSerial_fixed_gps_NEW.ino)
+Pavewise Mobile Rain Gauge — GPS ALWAYS + 3 MIN BUILD
 
 SUMMARY (what this build does every wake):
   1) Boots, downclocks CPU, disables WiFi/BT, mounts SD, and purges old logs
@@ -7,19 +7,19 @@ SUMMARY (what this build does every wake):
   2) Reads rainfall + battery voltage, then powers the modem and registers on
      the cellular network.
   3) Determines the current epoch: uses stored RTC estimate and re-anchors
-     from GPS every 6 hours (or on first boot), with adaptive GPS timeout.
+     from GPS every wake (or on first boot), with adaptive GPS timeout.
   4) Builds a compact payload (IMEI|batt_mv|rain_x100|epoch[|unit][|lat|lon]) and:
        - writes it to a daily CSV log
        - writes it to a queue file
        - attempts to POST all queued files with adaptive HTTP timeout
-  5) Gracefully powers down the modem and deep-sleeps for 15 minutes.
+  5) Gracefully powers down the modem and deep-sleeps for 3 minutes.
 
 PURPOSE OF THIS FILE:
   This build is specifically for verifying that the device is:
-    - reading rainfall correctly (15-minute delta)
+    - reading rainfall correctly (3-minute delta)
     - reading battery voltage correctly
     - building the compact payload correctly (NO commas, NO decimals)
-    - only including lat/lon when GPS is refreshed (every 6 hours)
+    - only including lat/lon when GPS is refreshed (every wake)
     - writing daily logs + queue files to SD
     - attempting modem power-down in software before deep sleep
 
@@ -40,10 +40,10 @@ DATA STORAGE STRATEGY:
 
 TIME STRATEGY:
   - g_epochEstimate stored in RTC memory survives deep sleep.
-  - On each wake, if epoch exists, add 900 seconds (15 min).
-  - Every 6 hours (or first boot), attempt GPS to re-anchor time and update location.
+  - On each wake, if epoch exists, add 180 seconds (3 min).
+  - Every wake (or first boot), attempt GPS to re-anchor time and update location.
   - GPS timeout is adaptive: last fix time * 2 (default 10 minutes).
-  - If GPS fails, schedule a retry on the next 15-minute wake.
+  - If GPS fails, schedule a retry on the next 3-minute wake.
 
 POWER STRATEGY (SOFTWARE-ONLY):
   - WiFi/BT off, CPU 80MHz.
@@ -73,7 +73,8 @@ POWER STRATEGY (SOFTWARE-ONLY):
 // Rain sensor library (DFRobot tipping bucket)
 #include "DFRobot_RainfallSensor.h"
 
-#define PAVEWISE_WAKE_INTERVAL_SECONDS (15UL * 60UL)
+#define PAVEWISE_WAKE_INTERVAL_SECONDS (3UL * 60UL)
+#define PAVEWISE_GPS_REFRESH_SECONDS 0UL
 #define PAVEWISE_ENABLE_HTTP true
 #include "utilities.h"
 

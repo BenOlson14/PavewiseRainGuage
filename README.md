@@ -126,10 +126,14 @@ The code uses a **queue folder on SD** to guarantee eventual delivery.
 1. On each wake, if network is available, the code scans `/queue`.
 2. Files are sorted by name (oldest first).
 3. Each queued file is sent **individually**.
-4. On success:
+4. If the server responds with a **payload format error**:
+   - The device retries that payload **once immediately**.
+   - If it still fails, the payload is retried **once per wake cycle**.
+   - After **10 consecutive cycles** of format errors, the queue file is deleted.
+5. On success:
    - The file is deleted **only after** a successful HTTP 2xx response.
    - The HTTP duration is recorded to tune the next timeout.
-5. On failure:
+6. On other failures:
    - The file is **left in the queue**.
    - The send loop stops and exits early.
    - The last HTTP duration is saved (if available).
@@ -141,6 +145,38 @@ The code uses a **queue folder on SD** to guarantee eventual delivery.
 - The device treats `{"status":"stored"}` as the expected server acknowledgment.
 
 This ensures **no data is lost**, even with intermittent cellular coverage.
+
+## Database schema + expected columns
+
+The server stores payloads in PostgreSQL using the schema in `server/schema.sql`. The primary table is `rain_gauge_readings` with the following expectations:
+
+| Column | Type | Expected format |
+| --- | --- | --- |
+| `id` | `BIGSERIAL` | Auto-generated primary key. |
+| `imei` | `TEXT` | **15-digit numeric IMEI** from the modem. |
+| `batt_v` | `NUMERIC(10, 3)` | Battery voltage in volts (`BATT_MV / 1000.0`). |
+| `rain_amount` | `NUMERIC(10, 4)` | Rain amount in the device unit (mm or in). |
+| `epoch_seconds` | `BIGINT` | Unix epoch seconds from the payload. |
+| `epoch_utc` | `TIMESTAMPTZ` | UTC timestamp derived from `epoch_seconds`. |
+| `lat_deg` | `NUMERIC(10, 7)` | Latitude in decimal degrees (optional). |
+| `lon_deg` | `NUMERIC(10, 7)` | Longitude in decimal degrees (optional). |
+| `has_gps` | `BOOLEAN` | True when GPS lat/lon were included. |
+| `received_at` | `TIMESTAMPTZ` | Server ingest timestamp. |
+
+The `device_rain_units` table maps each IMEI to a preferred unit (`mm` or `in`) and tracks when the device was first/last seen.
+
+### Payload expectations (server validation)
+- `IMEI` must be **15 digits**.
+- `BATT_MV`, `RAIN_X100`, `EPOCH`, `LAT`, and `LON` must be **integers** (LAT/LON allow a leading `-`).
+- Units must be `mm` or `in` when provided.
+- GPS coordinates must fall within valid ranges (lat ±90, lon ±180).
+
+Invalid payloads are rejected with an HTTP 400 response and a JSON body like:
+`{"error":"...","code":"invalid_payload","field":"imei"}`.
+
+## Why "SMS DONE" can show up in IMEI
+
+SIM7600 modems can emit unsolicited result codes (URCs) such as **`SMS DONE`** while the firmware is reading AT command responses. If a URC lands in the middle of an IMEI read, the raw response can be polluted and cached as the IMEI. The firmware now **drains the modem serial buffer and retries IMEI reads** (with a short delay) and **validates IMEI format** so `SMS DONE` cannot enter the payload or database.
 
 ## Notes on payload encoding (server decoding)
 
