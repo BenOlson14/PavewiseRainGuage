@@ -78,14 +78,19 @@ POWER STRATEGY (SOFTWARE-ONLY):
 #include "utilities.h"
 
 #if PAVEWISE_ENABLE_DEBUG
-  #define DBG_BEGIN()       do{ \
-    Serial.begin(DEBUG_BAUD); \
-    delay(200); \
-    #if defined(ARDUINO_ARCH_ESP32) \
+  #if defined(ARDUINO_ARCH_ESP32)
+    #define DBG_BEGIN()       do{ \
+      Serial.begin(DEBUG_BAUD); \
+      delay(200); \
       Serial.setTxBufferSize(2048); \
       Serial.setTxTimeoutMs(0); \
-    #endif \
-  }while(0)
+    }while(0)
+  #else
+    #define DBG_BEGIN()       do{ \
+      Serial.begin(DEBUG_BAUD); \
+      delay(200); \
+    }while(0)
+  #endif
   #define DBG_PRINT(x)      Serial.print(x)
   #define DBG_PRINTLN(x)    Serial.println(x)
   #define DBG_PRINTF(...)   Serial.printf(__VA_ARGS__)
