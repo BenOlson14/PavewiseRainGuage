@@ -165,6 +165,8 @@ The server stores payloads in PostgreSQL using the schema in `server/schema.sql`
 
 The `device_rain_units` table maps each IMEI to a preferred unit (`mm` or `in`) and tracks when the device was first/last seen.
 
+> **Note on time zones:** `TIMESTAMPTZ` values are stored in UTC, but clients display them in the session time zone. If you want `epoch_utc` (and `received_at`) to always render as UTC in tools like DBeaver, set the session time zone to UTC (e.g., `SET TIME ZONE 'UTC';`) or configure the connection’s time zone setting to `UTC`. You can also query with `epoch_utc AT TIME ZONE 'UTC'` to force UTC in a specific SELECT.
+
 ### Payload expectations (server validation)
 - `IMEI` must be **15 digits**.
 - `BATT_MV`, `RAIN_X100`, `EPOCH`, `LAT`, and `LON` must be **integers** (LAT/LON allow a leading `-`).
