@@ -41,11 +41,18 @@ Before running on hardware, set these values in **both sketches** (or at least i
 3. **Wake interval**
    - Serial / Release / No‑HTTP: 15 minutes (see `WAKE_INTERVAL_SECONDS`)
 
-4. **Optional: GPS / HTTP timing knobs** (already set but can be tuned):
+4. **Device serial number components** (sent in every payload):
+   - `SERIAL_SW_VERSION`: 2-digit software version (00-99).
+   - `SERIAL_SIM_PROVIDER`: 2-digit SIM provider/manufacturer code (00-99).
+   - `SERIAL_DEVICE_ID`: 7-digit device ID (0000000-9999999).
+
+5. **Optional: GPS / HTTP timing knobs** (already set but can be tuned):
    - GPS refresh every 6 hours (`GPS_REFRESH_SECONDS`)
    - GPS timeout: default 10 minutes, then adaptive (`GPS_TIMEOUT_DEFAULT_MS`)
    - GPS timeout minimum: 3 minutes (`GPS_TIMEOUT_MIN_MS`)
    - HTTP timeout multiplier: 5x last send (`HTTP_TIMEOUT_MULTIPLIER`)
+   - Queue preload test: `PAVEWISE_QUEUE_PRELOAD_TEST` (fixed count) or
+     `PAVEWISE_QUEUE_PRELOAD_WEEK` (generates ~1 week of payloads based on wake interval)
 
 ## System flow (high‑level)
 
@@ -85,7 +92,7 @@ Each wake cycle (after deep sleep) runs the **entire program in `setup()`**:
    - If fix fails, schedules retry 15 minutes later.
 
 8. **Payload generation**
-   - Compact format: `IMEI|BATT_MV|RAIN_X100|EPOCH[|LAT|LON]`
+   - Compact format: `IMEI|SERIAL|BATT_MV|RAIN_X100|EPOCH[|LAT|LON]`
    - Lat/Lon only included on GPS refresh wakes.
 
 9. **SD logging**
@@ -129,7 +136,8 @@ The code uses a **queue folder on SD** to guarantee eventual delivery.
 4. If the server responds with a **payload format error**:
    - The device retries that payload **once immediately**.
    - If it still fails, the payload is retried **once per wake cycle**.
-   - After **10 consecutive cycles** of format errors, the queue file is deleted.
+   - After **~1 week of consecutive cycles** of format errors (based on wake interval),
+     the queue file is deleted.
 5. On success:
    - The file is deleted **only after** a successful HTTP 2xx response.
    - The HTTP duration is recorded to tune the next timeout.
@@ -154,23 +162,18 @@ The server stores payloads in PostgreSQL using the schema in `server/schema.sql`
 | --- | --- | --- |
 | `id` | `BIGSERIAL` | Auto-generated primary key. |
 | `imei` | `TEXT` | **15-digit numeric IMEI** from the modem. |
+| `serial_number` | `TEXT` | **11-digit serial number** derived from firmware version, SIM provider, and device ID. |
 | `batt_v` | `NUMERIC(10, 3)` | Battery voltage in volts (`BATT_MV / 1000.0`). |
-| `rain_amount` | `NUMERIC(10, 4)` | Rain amount in the device unit (mm or in). |
+| `rain_amount` | `NUMERIC(10, 4)` | Rain amount in millimeters (`RAIN_X100 / 100.0`). |
 | `epoch_seconds` | `BIGINT` | Unix epoch seconds from the payload. |
-| `epoch_utc` | `TIMESTAMPTZ` | UTC timestamp derived from `epoch_seconds`. |
 | `lat_deg` | `NUMERIC(10, 7)` | Latitude in decimal degrees (optional). |
 | `lon_deg` | `NUMERIC(10, 7)` | Longitude in decimal degrees (optional). |
-| `has_gps` | `BOOLEAN` | True when GPS lat/lon were included. |
 | `received_at` | `TIMESTAMPTZ` | Server ingest timestamp. |
-
-The `device_rain_units` table maps each IMEI to a preferred unit (`mm` or `in`) and tracks when the device was first/last seen.
-
-> **Note on time zones:** `TIMESTAMPTZ` values are stored in UTC, but clients display them in the session time zone. If you want `epoch_utc` (and `received_at`) to always render as UTC in tools like DBeaver, set the session time zone to UTC (e.g., `SET TIME ZONE 'UTC';`) or configure the connection’s time zone setting to `UTC`. You can also query with `epoch_utc AT TIME ZONE 'UTC'` to force UTC in a specific SELECT.
 
 ### Payload expectations (server validation)
 - `IMEI` must be **15 digits**.
+- `SERIAL` must be **11 digits** (2-digit software version, 2-digit SIM provider, 7-digit device ID).
 - `BATT_MV`, `RAIN_X100`, `EPOCH`, `LAT`, and `LON` must be **integers** (LAT/LON allow a leading `-`).
-- Units must be `mm` or `in` when provided.
 - GPS coordinates must fall within valid ranges (lat ±90, lon ±180).
 
 Invalid payloads are rejected with an HTTP 400 response and a JSON body like:
@@ -189,9 +192,7 @@ To reduce data cost, the payload avoids commas and decimals:
 - `LAT` / `LON` = degrees × 1e7 (integer)
 
 On the server:
-- `rain_amount` is stored in the device's preferred unit (`mm` or `in`).
-  - `rain_amount = RAIN_X100 / 100.0` when the unit is `mm`.
-  - `rain_amount = (RAIN_X100 / 100.0) / 25.4` when the unit is `in`.
+- `rain_amount = RAIN_X100 / 100.0` (millimeters)
 - `batt_v = BATT_MV / 1000.0`
 - `lat     = LAT / 1e7`
 - `lon     = LON / 1e7`
@@ -364,10 +365,9 @@ Use the values in `connection_details.txt` to update:
 
 Additional device options you can adjust:
 - `PAVEWISE_DEBUG_BAUD` to set the Serial logging baud rate.
-- `PAVEWISE_RAIN_UNIT` to choose `"mm"` or `"in"` for reported rainfall (sent once on
-  the first successful upload for each IMEI).
-  - If the server does not recognize the IMEI and the unit was not included, it
-    responds with `unit_required` and the device will retry with the unit until stored.
+- `PAVEWISE_SERIAL_SW_VERSION`, `PAVEWISE_SERIAL_SIM_PROVIDER`, and
+  `PAVEWISE_SERIAL_DEVICE_ID` to control the 11-digit serial number sent with
+  every payload.
 
 Rebuild and flash the firmware after updating the values.
 
@@ -381,12 +381,9 @@ Create a new **PostgreSQL** connection with:
 
 Your readings are stored in the `rain_gauge_readings` table. The server automatically
 converts:
-- `epoch` → `epoch_utc` (UTC timestamp)
-- `rain_x100` → `rain_amount` (stored in the unit configured for that IMEI)
+- `rain_x100` → `rain_amount` (millimeters)
 - `batt_mv` → `batt_v`
 - `lat/lon` to decimal degrees (when present)
-
-Device reporting units are stored in the `device_rain_units` table (keyed by IMEI).
 
 ## Build selection guidance
 

@@ -13,11 +13,21 @@
 #define PAVEWISE_DEBUG_BAUD 115200
 #endif
 
-// Rainfall units reported to the server (sent once on first successful upload).
-// Expected values: "mm" or "in"
-// Example: #define PAVEWISE_RAIN_UNIT "mm"
-#ifndef PAVEWISE_RAIN_UNIT
-#define PAVEWISE_RAIN_UNIT "in"
+// Device serial number format (11 digits total):
+//   - digits 1-2: software version (00-99)
+//   - digits 3-4: SIM provider/manufacturer code (00-99)
+//   - digits 5-11: device ID (0000000-9999999)
+// Example: software version 1, provider 2, device ID 42 => "01020000042"
+#ifndef PAVEWISE_SERIAL_SW_VERSION
+#define PAVEWISE_SERIAL_SW_VERSION 1
+#endif
+
+#ifndef PAVEWISE_SERIAL_SIM_PROVIDER
+#define PAVEWISE_SERIAL_SIM_PROVIDER 1
+#endif
+
+#ifndef PAVEWISE_SERIAL_DEVICE_ID
+#define PAVEWISE_SERIAL_DEVICE_ID 1
 #endif
 
 // Wake interval (seconds) between deep-sleep cycles.
@@ -76,13 +86,19 @@
 #endif
 
 // Queue preload test (Serial build only):
-// When enabled, the sketch will add a fixed number of synthetic payloads to /queue
-// once per SD card (guarded by a state file) so you can validate queue send logic.
+// When enabled, the sketch will add synthetic payloads to /queue once per SD card
+// (guarded by a state file) so you can validate queue send logic.
+// - PAVEWISE_QUEUE_PRELOAD_TEST enables a fixed payload count.
+// - PAVEWISE_QUEUE_PRELOAD_WEEK enables a full week of payloads based on the wake interval.
+//   This is helpful for validating week-long backlog uploads in a single test run.
 #ifndef PAVEWISE_QUEUE_PRELOAD_TEST
 #define PAVEWISE_QUEUE_PRELOAD_TEST false
 #endif
 #ifndef PAVEWISE_QUEUE_PRELOAD_COUNT
 #define PAVEWISE_QUEUE_PRELOAD_COUNT 10
+#endif
+#ifndef PAVEWISE_QUEUE_PRELOAD_WEEK
+#define PAVEWISE_QUEUE_PRELOAD_WEEK false
 #endif
 
 // Cellular APN settings.
@@ -240,10 +256,6 @@
 #define PAVEWISE_FILE_IDENTITY "/state/identity.txt"
 #endif
 
-#ifndef PAVEWISE_FILE_RAIN_UNIT_SENT
-#define PAVEWISE_FILE_RAIN_UNIT_SENT "/state/rain_unit_sent.txt"
-#endif
-
 #ifndef PAVEWISE_FILE_HTTP_LAST_MS
 #define PAVEWISE_FILE_HTTP_LAST_MS "/state/http_last_ms.txt"
 #endif
@@ -255,7 +267,9 @@
 // ============================= CONFIG CONSTANTS =============================
 
 static const uint32_t DEBUG_BAUD = PAVEWISE_DEBUG_BAUD;
-static const char RAIN_UNIT[] = PAVEWISE_RAIN_UNIT;
+static const uint8_t SERIAL_SW_VERSION = PAVEWISE_SERIAL_SW_VERSION;
+static const uint8_t SERIAL_SIM_PROVIDER = PAVEWISE_SERIAL_SIM_PROVIDER;
+static const uint32_t SERIAL_DEVICE_ID = PAVEWISE_SERIAL_DEVICE_ID;
 
 static const uint32_t WAKE_INTERVAL_SECONDS = PAVEWISE_WAKE_INTERVAL_SECONDS;
 static const uint32_t GPS_REFRESH_SECONDS   = PAVEWISE_GPS_REFRESH_SECONDS;
@@ -268,7 +282,12 @@ static const uint32_t HTTP_TIMEOUT_MAX_MS     = PAVEWISE_HTTP_TIMEOUT_MAX_MS;
 static const uint32_t HTTP_TIMEOUT_MULTIPLIER = PAVEWISE_HTTP_TIMEOUT_MULTIPLIER;
 static const bool ENABLE_HTTP = PAVEWISE_ENABLE_HTTP;
 static const bool QUEUE_PRELOAD_TEST_ENABLED = PAVEWISE_QUEUE_PRELOAD_TEST;
-static const uint8_t QUEUE_PRELOAD_COUNT = PAVEWISE_QUEUE_PRELOAD_COUNT;
+static const bool QUEUE_PRELOAD_WEEK_ENABLED = PAVEWISE_QUEUE_PRELOAD_WEEK;
+static const uint32_t QUEUE_PRELOAD_COUNT = PAVEWISE_QUEUE_PRELOAD_COUNT;
+static const uint32_t QUEUE_PRELOAD_WEEK_COUNT =
+  ((7UL * 24UL * 3600UL) / WAKE_INTERVAL_SECONDS) > 0
+    ? ((7UL * 24UL * 3600UL) / WAKE_INTERVAL_SECONDS)
+    : 1UL;
 
 static const char APN[]       = PAVEWISE_APN;
 static const char GPRS_USER[] = PAVEWISE_GPRS_USER;
@@ -310,6 +329,5 @@ static const char *FILE_GPS_FIX_MS      = PAVEWISE_FILE_GPS_FIX_MS;
 static const char *FILE_GPS_RETRY_EPOCH = PAVEWISE_FILE_GPS_RETRY_EPOCH;
 static const char *FILE_IDENTITY        = PAVEWISE_FILE_IDENTITY;
 static const char *FILE_HTTP_LAST_MS    = PAVEWISE_FILE_HTTP_LAST_MS;
-static const char *FILE_RAIN_UNIT_SENT  = PAVEWISE_FILE_RAIN_UNIT_SENT;
 
 #endif
