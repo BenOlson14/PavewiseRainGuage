@@ -8,7 +8,7 @@ SUMMARY (what this build does every wake):
      the cellular network.
   3) Determines the current epoch: uses stored RTC estimate and re-anchors
      from GPS every wake (or on first boot), with adaptive GPS timeout.
-  4) Builds a compact payload (IMEI|batt_mv|rain_x100|epoch[|unit][|lat|lon]) and:
+  4) Builds a compact payload (IMEI|serial|batt_mv|rain_x100|epoch[|lat|lon]) and:
        - writes it to a daily CSV log
        - writes it to a queue file
        - attempts to POST all queued files with adaptive HTTP timeout
@@ -115,7 +115,11 @@ DFRobot_RainfallSensor_I2C RainSensor(&Wire);
 // Small delay between queued HTTP sends to avoid back-to-back modem churn.
 static const uint32_t HTTP_QUEUE_SEND_DELAY_MS = 1000;
 // Maximum number of per-cycle retries for invalid payloads before deleting queue entry.
-static const uint8_t HTTP_QUEUE_INVALID_RETRY_CYCLES = 10;
+// This caps invalid-payload retention to ~1 week based on the wake interval.
+static const uint32_t HTTP_QUEUE_INVALID_RETRY_CYCLES =
+  ((7UL * 24UL * 3600UL) / WAKE_INTERVAL_SECONDS) > 0
+    ? ((7UL * 24UL * 3600UL) / WAKE_INTERVAL_SECONDS)
+    : 1UL;
 // Time to wait for +CGPSINFO responses (ms).
 static const uint32_t GPS_INFO_WAIT_MS = 2500;
 
@@ -130,6 +134,26 @@ static bool isValidImei(const String &imei) {
     if (!isDigit(imei[i])) return false;
   }
   return true;
+}
+
+static String buildSerialNumber() {
+  uint32_t deviceId = SERIAL_DEVICE_ID;
+  if (deviceId > 9999999UL) {
+    DBG_PRINTF("[SERIAL] device id %lu out of range; clamping to 9999999\n",
+               (unsigned long)deviceId);
+    deviceId = 9999999UL;
+  }
+  if (SERIAL_SW_VERSION > 99 || SERIAL_SIM_PROVIDER > 99) {
+    DBG_PRINTF("[SERIAL] version/provider out of range (sw=%u sim=%u)\n",
+               (unsigned)SERIAL_SW_VERSION,
+               (unsigned)SERIAL_SIM_PROVIDER);
+  }
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%02u%02u%07lu",
+           (unsigned)SERIAL_SW_VERSION,
+           (unsigned)SERIAL_SIM_PROVIDER,
+           (unsigned long)deviceId);
+  return String(buf);
 }
 
 static void drainModemSerial(uint32_t durationMs = 150) {
@@ -324,26 +348,6 @@ static bool writeUInt32File(const char *path, uint32_t v) {
   return writeTextFile(path, String((unsigned long)v));
 }
 
-static bool readBoolFile(const char *path, bool &out) {
-  String s;
-  if (!readTextFile(path, s)) return false;
-  s.trim();
-  out = (s == "1" || s.equalsIgnoreCase("true"));
-  return true;
-}
-
-static bool writeBoolFile(const char *path, bool v) {
-  return writeTextFile(path, v ? "1" : "0");
-}
-
-static bool payloadHasUnitToken(const String &payload) {
-  int count = 0;
-  for (size_t i = 0; i < payload.length(); i++) {
-    if (payload[i] == '|') count++;
-  }
-  return (count == 4 || count == 6);
-}
-
 // Load cached identity: "iccid,imei"
 static bool loadIdentity(String &iccid, String &imei) {
   String line;
@@ -459,10 +463,7 @@ static String dailyLogPath(uint32_t epoch) {
 // Compact payload uses '|' delimiter and scaled integers (no commas, no decimals).
 //
 // Base record (always):
-//   I|B|R|E
-//
-// Optional one-time unit token (first successful upload only):
-//   |U
+//   I|S|B|R|E
 //
 // If GPS refreshed this wake, append:
 //   |LA|LO
@@ -473,7 +474,6 @@ static String dailyLogPath(uint32_t epoch) {
 //   LA = round(lat_deg * 1e7)             => lat     = LA / 1e7
 //   LO = round(lon_deg * 1e7)             => lon     = LO / 1e7
 //
-static const char *rainUnitToken() { return RAIN_UNIT; }
 static int32_t scaleRain100(float value) {
   return (int32_t)lroundf(value * 100.0f);
 }
@@ -483,29 +483,27 @@ static int32_t scaleDeg1e7(double deg) {
 }
 
 static String buildUploadPayload(const String &imei,
+                                 const String &serialNumber,
                                  uint32_t battMv,
                                  float rainDeltaMm,
                                  uint32_t epochNow,
-                                 bool includeUnit,
                                  bool includeGps,
                                  double lat,
                                  double lon) {
   int32_t R = scaleRain100(rainDeltaMm);
 
   String s;
-  s.reserve(includeGps ? 120 : 90);
+  s.reserve(includeGps ? 140 : 110);
 
   s += imei;
+  s += "|";
+  s += serialNumber;
   s += "|";
   s += String((unsigned long)battMv);
   s += "|";
   s += String(R);
   s += "|";
   s += String((unsigned long)epochNow);
-  if (includeUnit) {
-    s += "|";
-    s += rainUnitToken();
-  }
 
   if (includeGps) {
     s += "|";
@@ -854,21 +852,6 @@ static uint32_t computeHttpTimeoutMs(uint32_t lastHttpMs) {
   return (uint32_t)timeout;
 }
 
-static String buildUnitPayload(const String &imei) {
-  String s;
-  s.reserve(32);
-  s += imei;
-  s += "|";
-  s += rainUnitToken();
-  return s;
-}
-
-static String extractImeiFromPayload(const String &payload) {
-  int sep = payload.indexOf('|');
-  if (sep <= 0) return String();
-  return payload.substring(0, sep);
-}
-
 static String queueRetryStatePath(const String &queuePath) {
   String base = queuePath;
   int slash = base.lastIndexOf('/');
@@ -911,21 +894,27 @@ static const char *FILE_QUEUE_PRELOAD_DONE = "/state/queue_preload_done.txt";
 static const char *FILE_BOOT_COUNTER = PAVEWISE_FILE_BOOT_COUNTER;
 
 // Optionally preload synthetic payloads into /queue to validate queue sends.
-static void preloadQueueTestPayloads(uint32_t epochNow, const String &imei, uint32_t battMvVBAT) {
-  if (!QUEUE_PRELOAD_TEST_ENABLED) return;
+static void preloadQueueTestPayloads(uint32_t epochNow,
+                                     const String &imei,
+                                     const String &serialNumber,
+                                     uint32_t battMvVBAT) {
+  if (!QUEUE_PRELOAD_TEST_ENABLED && !QUEUE_PRELOAD_WEEK_ENABLED) return;
   if (SD.exists(FILE_QUEUE_PRELOAD_DONE)) return;
   if (epochNow == 0) epochNow = g_wakeCounter;
 
-  DBG_PRINTF("[QUEUE] preload test enabled: adding %u payloads\n",
-                (unsigned)QUEUE_PRELOAD_COUNT);
-  for (uint8_t i = 0; i < QUEUE_PRELOAD_COUNT; i++) {
+  uint32_t preloadCount = QUEUE_PRELOAD_WEEK_ENABLED
+                              ? QUEUE_PRELOAD_WEEK_COUNT
+                              : QUEUE_PRELOAD_COUNT;
+  DBG_PRINTF("[QUEUE] preload test enabled: adding %lu payloads\n",
+                (unsigned long)preloadCount);
+  for (uint32_t i = 0; i < preloadCount; i++) {
     uint32_t fakeEpoch = epochNow - (uint32_t)(i + 1) * 60UL;
     String payload = buildUploadPayload(
       imei,
+      serialNumber,
       battMvVBAT,
       0.0f,
       fakeEpoch,
-      false,
       false,
       0.0,
       0.0
@@ -963,7 +952,7 @@ static bool responseIndicatesInvalidPayload(int status, const String &response) 
 }
 
 // Send a single queued file (delete only on success).
-static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &durationMs, bool &unitSent) {
+static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &durationMs) {
   File f = SD.open(path, FILE_READ);
   if (!f) {
     DBG_PRINTF("[QUEUE] FAILED to open %s\n", path.c_str());
@@ -977,7 +966,6 @@ static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &dura
   String response;
   bool ok = httpPostPayload(line, timeoutMs, durationMs, status, response);
   bool stored = response.indexOf("stored") >= 0;
-  bool unitRequired = response.indexOf("unit_required") >= 0;
   bool invalidPayload = responseIndicatesInvalidPayload(status, response);
   DBG_PRINTF("[HTTP] %s status=%d duration=%lu ms timeout=%lu ms\n",
                 ok ? "OK" : "FAIL",
@@ -1007,37 +995,7 @@ static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &dura
     stored = retryStored;
     invalidPayload = retryInvalidPayload;
   }
-  if (!stored && unitRequired && !invalidPayload) {
-    String imei = extractImeiFromPayload(line);
-    if (imei.length()) {
-      String unitPayload = buildUnitPayload(imei);
-      uint32_t unitDuration = 0;
-      int unitStatus = 0;
-      String unitResponse;
-      bool unitOk = httpPostPayload(unitPayload, timeoutMs, unitDuration, unitStatus, unitResponse);
-      bool unitStored = unitResponse.indexOf("stored") >= 0;
-      if (unitOk && unitStored) {
-        unitSent = true;
-        writeBoolFile(FILE_RAIN_UNIT_SENT, true);
-        uint32_t retryDuration = 0;
-        int retryStatus = 0;
-        String retryResponse;
-        bool retryOk = httpPostPayload(line, timeoutMs, retryDuration, retryStatus, retryResponse);
-        bool retryStored = retryResponse.indexOf("stored") >= 0;
-        durationMs = retryDuration;
-        if (retryOk && retryStored) {
-          SD.remove(path.c_str());
-          clearQueueRetryState(path);
-          return true;
-        }
-      }
-    }
-  }
   if (ok && stored) {
-    if (!unitSent && payloadHasUnitToken(line)) {
-      unitSent = true;
-      writeBoolFile(FILE_RAIN_UNIT_SENT, true);
-    }
     SD.remove(path.c_str());
     clearQueueRetryState(path);
   } else if (invalidPayload) {
@@ -1059,7 +1017,7 @@ static bool sendQueueFile(const String &path, uint32_t timeoutMs, uint32_t &dura
 }
 
 // Walk the queue folder in order and attempt to send each payload.
-static void sendAllQueuedFiles(uint32_t &lastHttpMs, bool &unitSent) {
+static void sendAllQueuedFiles(uint32_t &lastHttpMs) {
   std::vector<String> files;
   File dir = SD.open(DIR_QUEUE);
   if (!dir) return;
@@ -1077,7 +1035,7 @@ static void sendAllQueuedFiles(uint32_t &lastHttpMs, bool &unitSent) {
   for (auto &p : files) {
     uint32_t durationMs = 0;
     uint32_t timeoutMs = computeHttpTimeoutMs(lastHttpMs);
-    if (!sendQueueFile(p, timeoutMs, durationMs, unitSent)) {
+    if (!sendQueueFile(p, timeoutMs, durationMs)) {
       lastHttpMs = HTTP_TIMEOUT_MAX_MS;
       writeUInt32File(FILE_HTTP_LAST_MS, lastHttpMs);
       break;
@@ -1165,8 +1123,8 @@ void setup() {
   readUInt32File(FILE_GPS_RETRY_EPOCH, gpsRetryEpoch);
   uint32_t lastHttpMs = 0;
   readUInt32File(FILE_HTTP_LAST_MS, lastHttpMs);
-  bool unitSent = false;
-  readBoolFile(FILE_RAIN_UNIT_SENT, unitSent);
+
+  String serialNumber = buildSerialNumber();
 
   // If RTC epoch estimate was lost but SD has GPS epoch, restore it.
   if (g_epochEstimate == 0 && lastGpsEpoch > 0) {
@@ -1302,10 +1260,10 @@ void setup() {
   // COMPACT PAYLOAD (no commas, no decimals).
   String payload = buildUploadPayload(
     imei,
+    serialNumber,
     battMvVBAT,
     deltaMm,
     epochNow,
-    !unitSent,
     gpsIncludedInUpload,   // only include lat/lon when GPS refreshed
     lastLat,
     lastLon
@@ -1326,7 +1284,7 @@ void setup() {
   DBG_PRINTF("[QUEUE] wrote %s\n", qPath.c_str());
 
   // Optional queue preload test before sending.
-  preloadQueueTestPayloads(epochNow, imei, battMvVBAT);
+  preloadQueueTestPayloads(epochNow, imei, serialNumber, battMvVBAT);
 
   // Attempt HTTP sending for queued files (if enabled and network OK).
   if (ENABLE_HTTP) {
@@ -1334,7 +1292,7 @@ void setup() {
       uint32_t timeoutMs = computeHttpTimeoutMs(lastHttpMs);
       DBG_PRINTF("[HTTP] sending queued payloads (timeout %lu ms)...\n",
                     (unsigned long)timeoutMs);
-      sendAllQueuedFiles(lastHttpMs, unitSent);
+      sendAllQueuedFiles(lastHttpMs);
     } else {
       DBG_PRINTLN("[HTTP] skipped (network not OK)");
     }

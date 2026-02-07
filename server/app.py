@@ -4,7 +4,6 @@ import re
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
 
 import psycopg2
 from flask import Flask, jsonify, request
@@ -30,18 +29,6 @@ def get_db_conn():
     )
 
 
-def _normalize_unit(raw_unit: str | None) -> str | None:
-    """Normalize unit tokens sent by devices."""
-    if raw_unit is None:
-        return None
-    unit = raw_unit.lower()
-    if unit in ("inch", "inches"):
-        unit = "in"
-    if unit not in ("mm", "in"):
-        return None
-    return unit
-
-
 @dataclass(frozen=True)
 class PayloadError(Exception):
     message: str
@@ -49,6 +36,7 @@ class PayloadError(Exception):
 
 
 _IMEI_RE = re.compile(r"^\d{15}$")
+_SERIAL_RE = re.compile(r"^\d{11}$")
 
 
 def _require_int(value: str, field: str, allow_negative: bool = False) -> int:
@@ -72,41 +60,35 @@ def _validate_imei(imei: str) -> None:
         raise PayloadError("Expected 15-digit IMEI", "imei")
 
 
+def _validate_serial(serial_number: str) -> None:
+    if not _SERIAL_RE.match(serial_number):
+        raise PayloadError("Expected 11-digit serial number", "serial_number")
+
+
 def parse_payload(raw_payload: str) -> dict:
     """Decode the compact payload into typed values with strict format checks."""
     # Trim and split on the compact delimiter. Empty segments are discarded.
     parts = [part.strip() for part in raw_payload.strip().split("|") if part.strip()]
-    if len(parts) not in (4, 5, 6, 7):
+    if len(parts) not in (5, 7):
         raise ValueError(
-            "Invalid payload format. Expected IMEI|BATT_MV|RAIN_X100|EPOCH[|UNIT][|LAT|LON]."
+            "Invalid payload format. Expected IMEI|SERIAL|BATT_MV|RAIN_X100|EPOCH[|LAT|LON]."
         )
 
     imei = parts[0]
     _validate_imei(imei)
-    batt_mv = _require_int(parts[1], "batt_mv")
-    rain_x100 = _require_int(parts[2], "rain_x100")
-    epoch_seconds = _require_int(parts[3], "epoch_seconds")
+    serial_number = parts[1]
+    _validate_serial(serial_number)
+    batt_mv = _require_int(parts[2], "batt_mv")
+    rain_x100 = _require_int(parts[3], "rain_x100")
+    epoch_seconds = _require_int(parts[4], "epoch_seconds")
 
-    unit = None
     lat_deg = None
     lon_deg = None
-    has_gps = False
-
-    # Optional unit token (mm/in) can be sent once, or whenever it changes.
-    if len(parts) in (5, 7):
-        unit = _normalize_unit(parts[4])
-        if unit is None:
-            raise PayloadError("Invalid unit token", "rain_unit")
 
     # GPS coordinates are only present when the device refreshes GNSS.
-    if len(parts) == 6:
-        lat_deg = _require_int(parts[4], "lat_deg", allow_negative=True) / 1e7
-        lon_deg = _require_int(parts[5], "lon_deg", allow_negative=True) / 1e7
-        has_gps = True
-    elif len(parts) == 7:
+    if len(parts) == 7:
         lat_deg = _require_int(parts[5], "lat_deg", allow_negative=True) / 1e7
         lon_deg = _require_int(parts[6], "lon_deg", allow_negative=True) / 1e7
-        has_gps = True
 
     if batt_mv < 0 or batt_mv > 8000:
         raise PayloadError("Battery millivolts out of range", "batt_mv")
@@ -114,7 +96,7 @@ def parse_payload(raw_payload: str) -> dict:
         raise PayloadError("Rain amount must be non-negative", "rain_x100")
     if epoch_seconds < 0:
         raise PayloadError("Epoch seconds must be non-negative", "epoch_seconds")
-    if has_gps:
+    if lat_deg is not None or lon_deg is not None:
         if lat_deg is None or lon_deg is None:
             raise PayloadError("Missing GPS coordinates", "gps")
         if not (-90.0 <= lat_deg <= 90.0):
@@ -124,15 +106,13 @@ def parse_payload(raw_payload: str) -> dict:
 
     return {
         "imei": imei,
+        "serial_number": serial_number,
         "batt_mv": batt_mv,
         "batt_v": round(batt_mv / 1000.0, 3),
         "rain_x100": rain_x100,
-        "rain_unit": unit,
         "epoch_seconds": epoch_seconds,
-        "epoch_utc": datetime.fromtimestamp(epoch_seconds, tz=timezone.utc),
         "lat_deg": lat_deg,
         "lon_deg": lon_deg,
-        "has_gps": has_gps,
     }
 
 
@@ -181,37 +161,6 @@ def ingest():
         app.logger.warning("ingest_empty_payload")
         return jsonify({"error": "Empty payload"}), 400
 
-    # A short unit-only payload (IMEI|UNIT) is used to register the device unit.
-    unit_parts = [part.strip() for part in payload.split("|") if part.strip()]
-    if len(unit_parts) == 2:
-        unit = _normalize_unit(unit_parts[1])
-        if unit is None:
-            return jsonify({"error": "Invalid unit payload", "code": "invalid_payload"}), 400
-        try:
-            _validate_imei(unit_parts[0])
-        except PayloadError as exc:
-            return (
-                jsonify({"error": exc.message, "code": "invalid_payload", "field": exc.field}),
-                400,
-            )
-        try:
-            with get_db_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        INSERT INTO device_rain_units (imei, rain_unit, first_seen, last_seen)
-                        VALUES (%s, %s, NOW(), NOW())
-                        ON CONFLICT (imei) DO UPDATE
-                            SET rain_unit = EXCLUDED.rain_unit,
-                                last_seen = NOW()
-                        """,
-                        (unit_parts[0], unit),
-                    )
-        except Exception as exc:
-            app.logger.exception("db_unit_insert_error payload=%s error=%s", payload, exc)
-            return jsonify({"error": "Database insert failed"}), 500
-        return jsonify({"status": "stored"})
-
     try:
         parsed = parse_payload(payload)
     except PayloadError as exc:
@@ -230,60 +179,24 @@ def ingest():
     insert_sql = """
         INSERT INTO rain_gauge_readings (
             imei,
+            serial_number,
             batt_v,
             rain_amount,
             epoch_seconds,
-            epoch_utc,
             lat_deg,
-            lon_deg,
-            has_gps
+            lon_deg
         )
-        VALUES (%(imei)s, %(batt_v)s, %(rain_amount)s,
-                %(epoch_seconds)s, %(epoch_utc)s, %(lat_deg)s, %(lon_deg)s, %(has_gps)s)
+        VALUES (%(imei)s, %(serial_number)s, %(batt_v)s, %(rain_amount)s,
+                %(epoch_seconds)s, %(lat_deg)s, %(lon_deg)s)
     """
 
     try:
         app.logger.info("db_insert_attempt payload=%s", payload)
         with get_db_conn() as conn:
             with conn.cursor() as cur:
-                # If the payload did not include a unit, look up the stored one.
-                if parsed["rain_unit"] is None:
-                    cur.execute(
-                        "SELECT rain_unit FROM device_rain_units WHERE imei = %s",
-                        (parsed["imei"],),
-                    )
-                    row = cur.fetchone()
-                    if row is None:
-                        return (
-                            jsonify(
-                                {
-                                    "error": "Unit required for unknown IMEI.",
-                                    "code": "unit_required",
-                                }
-                            ),
-                            400,
-                        )
-                    parsed["rain_unit"] = row[0]
-                else:
-                    # Upsert the unit if it was explicitly provided.
-                    cur.execute(
-                        """
-                        INSERT INTO device_rain_units (imei, rain_unit, first_seen, last_seen)
-                        VALUES (%(imei)s, %(rain_unit)s, NOW(), NOW())
-                        ON CONFLICT (imei) DO UPDATE
-                            SET rain_unit = EXCLUDED.rain_unit,
-                                last_seen = NOW()
-                        """,
-                        parsed,
-                    )
-
                 # Payload rain values are scaled millimeters (RAIN_X100).
-                # Store the rain amount in the device's preferred unit.
                 rain_mm = parsed["rain_x100"] / 100.0
-                if parsed["rain_unit"] == "in":
-                    parsed["rain_amount"] = round(rain_mm / 25.4, 4)
-                else:
-                    parsed["rain_amount"] = round(rain_mm, 4)
+                parsed["rain_amount"] = round(rain_mm, 4)
 
                 cur.execute(insert_sql, parsed)
     except Exception as exc:
