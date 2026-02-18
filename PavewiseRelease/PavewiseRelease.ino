@@ -114,10 +114,10 @@ DFRobot_RainfallSensor_I2C RainSensor(&Wire);
 // Small delay between queued HTTP sends to avoid back-to-back modem churn.
 static const uint32_t HTTP_QUEUE_SEND_DELAY_MS = 1000;
 // Maximum number of per-cycle retries for invalid payloads before deleting queue entry.
-// This caps invalid-payload retention to ~1 week based on the wake interval.
+// Retention is configured in utilities.h via PAVEWISE_QUEUE_INVALID_RETENTION_DAYS.
 static const uint32_t HTTP_QUEUE_INVALID_RETRY_CYCLES =
-  ((7UL * 24UL * 3600UL) / WAKE_INTERVAL_SECONDS) > 0
-    ? ((7UL * 24UL * 3600UL) / WAKE_INTERVAL_SECONDS)
+  ((QUEUE_INVALID_RETENTION_DAYS * 24UL * 3600UL) / WAKE_INTERVAL_SECONDS) > 0
+    ? ((QUEUE_INVALID_RETENTION_DAYS * 24UL * 3600UL) / WAKE_INTERVAL_SECONDS)
     : 1UL;
 // Time to wait for +CGPSINFO responses (ms).
 static const uint32_t GPS_INFO_WAIT_MS = 2500;
