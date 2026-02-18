@@ -85,6 +85,14 @@
 #define PAVEWISE_ENABLE_HTTP true
 #endif
 
+// Invalid queue payload retention window (days).
+// If server keeps returning "invalid payload", the file is deleted after this many days
+// worth of wake cycles.
+// Example: #define PAVEWISE_QUEUE_INVALID_RETENTION_DAYS 7UL
+#ifndef PAVEWISE_QUEUE_INVALID_RETENTION_DAYS
+#define PAVEWISE_QUEUE_INVALID_RETENTION_DAYS 7UL
+#endif
+
 // Queue preload test (Serial build only):
 // When enabled, the sketch will add synthetic payloads to /queue once per SD card
 // (guarded by a state file) so you can validate queue send logic.
@@ -281,6 +289,7 @@ static const uint32_t HTTP_TIMEOUT_DEFAULT_MS = PAVEWISE_HTTP_TIMEOUT_DEFAULT_MS
 static const uint32_t HTTP_TIMEOUT_MAX_MS     = PAVEWISE_HTTP_TIMEOUT_MAX_MS;
 static const uint32_t HTTP_TIMEOUT_MULTIPLIER = PAVEWISE_HTTP_TIMEOUT_MULTIPLIER;
 static const bool ENABLE_HTTP = PAVEWISE_ENABLE_HTTP;
+static const uint32_t QUEUE_INVALID_RETENTION_DAYS = PAVEWISE_QUEUE_INVALID_RETENTION_DAYS;
 static const bool QUEUE_PRELOAD_TEST_ENABLED = PAVEWISE_QUEUE_PRELOAD_TEST;
 static const bool QUEUE_PRELOAD_WEEK_ENABLED = PAVEWISE_QUEUE_PRELOAD_WEEK;
 static const uint32_t QUEUE_PRELOAD_COUNT = PAVEWISE_QUEUE_PRELOAD_COUNT;
