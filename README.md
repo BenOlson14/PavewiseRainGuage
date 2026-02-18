@@ -67,7 +67,8 @@ Each wake cycle (after deep sleep) runs the **entire program in `setup()`**:
    - If SD usage exceeds 80%, deletes oldest daily logs until ~70% usage.
 
 3. **Load persistent state**
-   - Cached IMEI/ICCID.
+   - Cached IMEI/ICCID (used for payloads if LTE is down).
+   - Last IMEI refresh epoch (so IMEI checks follow GPS cadence).
    - Last GPS fix time + coordinates.
    - Last GPS fix duration (for adaptive timeout).
    - Last HTTP send duration (for adaptive timeout).
@@ -85,6 +86,7 @@ Each wake cycle (after deep sleep) runs the **entire program in `setup()`**:
    - Waits for network registration.
    - Prints operator, RSSI, local IP.
    - Attempts GPRS attach for HTTP (if enabled).
+   - Refreshes ICCID/IMEI only on GPS-refresh wakes (nominally every 6 hours).
 
 7. **GPS refresh logic** (every 6 hours)
    - On first boot or every 6 hours, attempt GNSS fix.
@@ -94,6 +96,7 @@ Each wake cycle (after deep sleep) runs the **entire program in `setup()`**:
 8. **Payload generation**
    - Compact format: `IMEI|SERIAL|BATT_MV|RAIN_X100|EPOCH[|LAT|LON]`
    - Lat/Lon only included on GPS refresh wakes.
+   - If no valid IMEI is available yet, firmware uses a numeric fallback (`000000000000000`) so the payload remains parseable and queue-safe.
 
 9. **SD logging**
    - Daily CSV log under `/logs/log_YYYYMMDD.csv`.
@@ -153,6 +156,17 @@ The code uses a **queue folder on SD** to guarantee eventual delivery.
 - The device treats `{"status":"stored"}` as the expected server acknowledgment.
 
 This ensures **no data is lost**, even with intermittent cellular coverage.
+
+
+## LTE outage behavior and queue caveats
+
+When LTE/GPRS is unavailable, the firmware still records the rain/battery sample and writes it to `/queue/` for later upload. The queue is drained oldest-first once connectivity returns.
+
+Important caveats to be aware of:
+
+- If the device has **never captured a real IMEI** (first boot + poor coverage), queued entries will use the fallback IMEI until a valid one is cached.
+- Queue growth is bounded only by SD capacity; if long outages fill the card, log purging may occur to reclaim space.
+- If epoch time cannot be refreshed for long periods, timestamps depend on RTC estimate and may drift.
 
 ## Database schema + expected columns
 

@@ -121,6 +121,7 @@ static const uint32_t HTTP_QUEUE_INVALID_RETRY_CYCLES =
     : 1UL;
 // Time to wait for +CGPSINFO responses (ms).
 static const uint32_t GPS_INFO_WAIT_MS = 2500;
+static const char *FALLBACK_IMEI = "000000000000000";
 
 // Safe elapsed millis calculator (handles wrap naturally).
 static uint32_t elapsedMs(uint32_t startMs) {
@@ -595,7 +596,7 @@ static void modemBestEffortPowerDown() {
 }
 
 // Connect network and PDP context; also read ICCID/IMEI.
-static bool connectNetwork(String &iccid, String &imei, int &rssi) {
+static bool connectNetwork(String &iccid, String &imei, int &rssi, bool refreshIdentity) {
   rssi = -1;
 
   if (!modem.init()) {
@@ -609,14 +610,18 @@ static bool connectNetwork(String &iccid, String &imei, int &rssi) {
   delay(200);
 #endif
 
-  String tIccid = modem.getSimCCID();
-  String tImei  = readModemImei();
+  if (refreshIdentity) {
+    String tIccid = modem.getSimCCID();
+    String tImei  = readModemImei();
 
-  if (tIccid.length()) iccid = tIccid;
-  if (tImei.length() && isValidImei(tImei)) {
-    imei = tImei;
-  } else if (tImei.length()) {
-    DBG_PRINTF("[MODEM] IMEI read invalid: %s\n", tImei.c_str());
+    if (tIccid.length()) iccid = tIccid;
+    if (tImei.length() && isValidImei(tImei)) {
+      imei = tImei;
+    } else if (tImei.length()) {
+      DBG_PRINTF("[MODEM] IMEI read invalid: %s\n", tImei.c_str());
+    }
+  } else {
+    DBG_PRINTLN("[MODEM] Skipping ICCID/IMEI refresh this wake");
   }
 
   DBG_PRINTF("[MODEM] ICCID: %s\n", iccid.c_str());
@@ -1108,8 +1113,8 @@ void setup() {
   DBG_PRINTF("[BOOT] cold boot detected: %s\n", coldBoot ? "YES" : "NO");
 
   // Load cached identity so we can still build payload even if modem fails.
-  String iccid = "unknown";
-  String imei  = "unknown";
+  String iccid;
+  String imei;
   loadIdentity(iccid, imei);
 
   // Load last GPS state (survives power loss).
@@ -1120,6 +1125,8 @@ void setup() {
   readUInt32File(FILE_GPS_FIX_MS, lastGpsFixMs);
   uint32_t gpsRetryEpoch = 0;
   readUInt32File(FILE_GPS_RETRY_EPOCH, gpsRetryEpoch);
+  uint32_t imeiLastCheckEpoch = 0;
+  readUInt32File(FILE_IMEI_LAST_CHECK_EPOCH, imeiLastCheckEpoch);
   uint32_t lastHttpMs = 0;
   readUInt32File(FILE_HTTP_LAST_MS, lastHttpMs);
 
@@ -1154,17 +1161,6 @@ void setup() {
   bool modemOk = modemPowerOn();
   DBG_PRINTF("[MODEM] Overall modem connect: %s\n", modemOk ? "OK" : "FAIL");
 
-  // Network connect (only if modemOk), and cache ICCID/IMEI to SD.
-  int rssi = -1;
-  bool netOk = false;
-  if (modemOk) {
-    netOk = connectNetwork(iccid, imei, rssi);
-    DBG_PRINTF("[NET] Registered: %s (RSSI=%d)\n", netOk ? "YES" : "NO", rssi);
-
-    // Save identity so power loss still has ID next boot.
-    saveIdentity(iccid, imei);
-  }
-
   // Determine our best epoch for this wake (RTC estimate or last GPS).
   uint32_t epochNow = g_epochEstimate;
   if (epochNow == 0 && lastGpsEpoch > 0) epochNow = lastGpsEpoch;
@@ -1183,6 +1179,30 @@ void setup() {
                  (epochNow >= lastGpsEpoch && (epochNow - lastGpsEpoch) >= GPS_REFRESH_SECONDS) ||
                  gpsRetryDue ||
                  (g_wakeCounter == 1);
+
+  // Network connect (only if modemOk). Refresh ICCID/IMEI only when GPS cadence is due.
+  int rssi = -1;
+  bool netOk = false;
+  bool identityRefreshDue = needGps;
+  if (modemOk) {
+    netOk = connectNetwork(iccid, imei, rssi, identityRefreshDue);
+    DBG_PRINTF("[NET] Registered: %s (RSSI=%d)\n", netOk ? "YES" : "NO", rssi);
+
+    if (identityRefreshDue && isValidImei(imei)) {
+      saveIdentity(iccid, imei);
+      if (epochNow > 0) {
+        imeiLastCheckEpoch = epochNow;
+        writeUInt32File(FILE_IMEI_LAST_CHECK_EPOCH, imeiLastCheckEpoch);
+      }
+    }
+  }
+
+  bool imeiStale = (epochNow > 0 && imeiLastCheckEpoch > 0 &&
+                    epochNow >= imeiLastCheckEpoch &&
+                    (epochNow - imeiLastCheckEpoch) >= GPS_REFRESH_SECONDS);
+  if (imeiStale) {
+    DBG_PRINTLN("[MODEM] IMEI cache is older than GPS refresh window");
+  }
 
   bool gpsIncludedInUpload = false;
 
@@ -1255,6 +1275,11 @@ void setup() {
 
   // If epoch still zero, fall back to lastGpsEpoch.
   if (epochNow == 0) epochNow = lastGpsEpoch;
+
+  if (!isValidImei(imei)) {
+    DBG_PRINTF("[PAYLOAD] IMEI unavailable; using fallback %s\n", FALLBACK_IMEI);
+    imei = FALLBACK_IMEI;
+  }
 
   // COMPACT PAYLOAD (no commas, no decimals).
   String payload = buildUploadPayload(
