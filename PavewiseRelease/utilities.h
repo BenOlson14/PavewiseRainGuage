@@ -264,6 +264,10 @@
 #define PAVEWISE_FILE_IDENTITY "/state/identity.txt"
 #endif
 
+#ifndef PAVEWISE_FILE_IMEI_LAST_CHECK_EPOCH
+#define PAVEWISE_FILE_IMEI_LAST_CHECK_EPOCH "/state/imei_last_check_epoch.txt"
+#endif
+
 #ifndef PAVEWISE_FILE_HTTP_LAST_MS
 #define PAVEWISE_FILE_HTTP_LAST_MS "/state/http_last_ms.txt"
 #endif
@@ -337,6 +341,7 @@ static const char *FILE_GPS_LAST        = PAVEWISE_FILE_GPS_LAST;
 static const char *FILE_GPS_FIX_MS      = PAVEWISE_FILE_GPS_FIX_MS;
 static const char *FILE_GPS_RETRY_EPOCH = PAVEWISE_FILE_GPS_RETRY_EPOCH;
 static const char *FILE_IDENTITY        = PAVEWISE_FILE_IDENTITY;
+static const char *FILE_IMEI_LAST_CHECK_EPOCH = PAVEWISE_FILE_IMEI_LAST_CHECK_EPOCH;
 static const char *FILE_HTTP_LAST_MS    = PAVEWISE_FILE_HTTP_LAST_MS;
 
 #endif
