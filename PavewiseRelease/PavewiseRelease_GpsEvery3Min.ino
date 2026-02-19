@@ -362,8 +362,19 @@ static bool loadIdentity(String &iccid, String &imei) {
 
 // Save identity cache.
 static void saveIdentity(const String &iccid, const String &imei) {
-  if (iccid.length() == 0 || !isValidImei(imei)) return;
-  writeTextFile(FILE_IDENTITY, iccid + "," + imei);
+  if (!isValidImei(imei)) return;
+
+  String iccidToSave = iccid;
+  if (iccidToSave.length() == 0) {
+    String cachedIccid, cachedImei;
+    if (loadIdentity(cachedIccid, cachedImei) && cachedIccid.length() > 0) {
+      iccidToSave = cachedIccid;
+    } else {
+      iccidToSave = "unknown";
+    }
+  }
+
+  writeTextFile(FILE_IDENTITY, iccidToSave + "," + imei);
 }
 
 // Load last GPS state: "epoch,lat,lon"
