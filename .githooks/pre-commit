@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+changed_files=$(git diff --cached --name-only)
+
+if grep -qE '^(docs/system-architecture\.md|scripts/export_architecture_diagrams\.py|docs/presentation-assets/README\.md)$' <<<"${changed_files}"; then
+  echo "[pre-commit] Refreshing architecture presentation assets..."
+  python scripts/export_architecture_diagrams.py
+  echo "[pre-commit] Presentation assets refreshed in docs/presentation-assets/."
+fi
