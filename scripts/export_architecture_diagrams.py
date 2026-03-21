@@ -60,6 +60,12 @@ def render_png(mermaid_source: str) -> bytes:
         return response.read()
 
 
+def flatten_on_white(image, image_module):
+    rgba_image = image.convert("RGBA")
+    white_background = image_module.new("RGBA", rgba_image.size, (255, 255, 255, 255))
+    return image_module.alpha_composite(white_background, rgba_image).convert("RGB")
+
+
 def main() -> int:
     Image = require_pillow()
 
@@ -79,7 +85,9 @@ def main() -> int:
         pdf_path = OUT_DIR / f"{output_name}.pdf"
         png_path.write_bytes(png_bytes)
 
-        image = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+        source_image = Image.open(io.BytesIO(png_bytes))
+        image = flatten_on_white(source_image, Image)
+        image.save(png_path, "PNG")
         image.save(pdf_path, "PDF", resolution=200.0)
         pdf_images.append(image)
         print(f"wrote {png_path.relative_to(DOC_PATH.parent.parent)}")

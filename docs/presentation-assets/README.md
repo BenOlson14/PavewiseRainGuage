@@ -10,7 +10,7 @@ python -m pip install pillow
 python scripts/export_architecture_diagrams.py
 ```
 
-The script reads Mermaid diagrams from `docs/system-architecture.md` and writes:
+The script reads Mermaid diagrams from `docs/system-architecture.md`, flattens transparent backgrounds onto white for presentation printing, and writes:
 
 - `deployment-networking.pdf`
 - `deployment-networking.png`
