@@ -7,12 +7,12 @@ This document captures the current system architecture for the Pavewise rain gau
 ```mermaid
 flowchart LR
     subgraph Field[Field Deployment]
-        RS["DFRobot Rainfall Sensor<br/>I2C"]
-        BAT["Battery ADC<br/>GPIO 35"]
-        SD["MicroSD Card<br/>logs, queue, state"]
-        GNSS["SIM7600 GNSS"]
-        MCU["LilyGo T-SIM7600<br/>ESP32 firmware"]
-        LTE["SIM7600 LTE modem<br/>APN and GPRS"]
+        RS[DFRobot Rainfall Sensor\nI2C]
+        BAT[Battery ADC\nGPIO 35]
+        SD[MicroSD Card\n/logs /queue /state]
+        GNSS[SIM7600 GNSS]
+        MCU[LilyGo T-SIM7600\nESP32 Firmware]
+        LTE[SIM7600 LTE Modem\nAPN + GPRS]
 
         RS --> MCU
         BAT --> MCU
