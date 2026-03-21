@@ -1,5 +1,7 @@
 # Pavewise Mobile Rain Gauge (LilyGo T-SIM7600)
 
+[System architecture diagrams](docs/system-architecture.md) provide deployment, networking, and end-to-end flow views of the platform.
+
 This repository contains two primary firmware sketches for a LilyGo T-SIM7600 (SIM7600 + ESP32) rain gauge using the DFRobot rainfall sensor. The sketches share the same core logic but are tuned for different deployment stages (release and no-HTTP logging). The goal is to **collect rainfall and battery data at a fixed cadence**, periodically refresh GPS and time from GNSS, log to SD, and (when enabled) send a compact payload over HTTP.
 
 ## Files and roles
