@@ -19,3 +19,16 @@ The script reads Mermaid diagrams from `docs/system-architecture.md` and writes:
 - `server-ingest-flow.pdf`
 - `server-ingest-flow.png`
 - `pavewise-system-architecture-diagrams.pdf`
+
+
+## Keep assets up to date on each local update
+
+A pre-commit hook template is provided at `.githooks/pre-commit`.
+
+To enable it in your clone, run:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+After that, any commit that stages changes to the architecture markdown or export script will regenerate the local PDF/PNG assets inside `docs/presentation-assets/` before the commit completes.

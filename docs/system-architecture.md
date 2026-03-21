@@ -147,6 +147,12 @@ The script writes these local presentation assets:
 - `presentation-assets/firmware-wake-cycle.pdf`
 - `presentation-assets/server-ingest-flow.pdf`
 
+If you want the folder refreshed automatically whenever these architecture files change locally, enable the repo hook template:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ### Option A: Download the Markdown file from GitHub
 
 1. Open `docs/system-architecture.md` in the GitHub repository.
