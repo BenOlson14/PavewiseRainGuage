@@ -131,6 +131,22 @@ sequenceDiagram
 
 ## 7. How to download these diagrams for a presentation
 
+### Generate PDF files locally
+
+Pull requests should stay text-only, so the PDF and PNG exports are generated on demand instead of being committed. Use the helper script below to create the presentation files in `docs/presentation-assets/`:
+
+```bash
+python -m pip install pillow
+python scripts/export_architecture_diagrams.py
+```
+
+The script writes these local presentation assets:
+
+- `presentation-assets/pavewise-system-architecture-diagrams.pdf`
+- `presentation-assets/deployment-networking.pdf`
+- `presentation-assets/firmware-wake-cycle.pdf`
+- `presentation-assets/server-ingest-flow.pdf`
+
 ### Option A: Download the Markdown file from GitHub
 
 1. Open `docs/system-architecture.md` in the GitHub repository.
