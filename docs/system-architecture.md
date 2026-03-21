@@ -7,12 +7,12 @@ This document captures the current system architecture for the Pavewise rain gau
 ```mermaid
 flowchart LR
     subgraph Field[Field Deployment]
-        RS[DFRobot Rainfall Sensor\nI2C]
-        BAT[Battery ADC\nGPIO 35]
-        SD[MicroSD Card\n/logs /queue /state]
-        GNSS[SIM7600 GNSS]
-        MCU[LilyGo T-SIM7600\nESP32 Firmware]
-        LTE[SIM7600 LTE Modem\nAPN + GPRS]
+        RS["DFRobot Rainfall Sensor<br/>I2C"]
+        BAT["Battery ADC<br/>GPIO 35"]
+        SD["MicroSD Card<br/>logs, queue, state"]
+        GNSS["SIM7600 GNSS"]
+        MCU["LilyGo T-SIM7600<br/>ESP32 firmware"]
+        LTE["SIM7600 LTE modem<br/>APN and GPRS"]
 
         RS --> MCU
         BAT --> MCU
@@ -128,3 +128,40 @@ sequenceDiagram
 - **GPS failure**: device falls back to cached epoch/location and retries GPS later.
 - **Invalid payload**: server returns HTTP 400, firmware retains the queue item and eventually drops it after the configured invalid-payload retention window.
 - **Database insert failure**: server returns HTTP 500, and the device keeps the queue file for later retry.
+
+## 7. How to download these diagrams for a presentation
+
+### Option A: Download the Markdown file from GitHub
+
+1. Open `docs/system-architecture.md` in the GitHub repository.
+2. Click **Raw** to open the plain Markdown source.
+3. Use your browser **Save As** action to download the file.
+
+### Option B: Download the whole repository
+
+1. In GitHub, click the green **Code** button.
+2. Choose **Download ZIP**.
+3. Open the ZIP and pull the file from `docs/system-architecture.md`.
+
+### Option C: Export to PDF for slides or speaker notes
+
+1. Open the rendered `docs/system-architecture.md` page in GitHub.
+2. In your browser, choose **Print**.
+3. Set the destination to **Save as PDF**.
+4. Save the PDF and import it into PowerPoint, Keynote, or Google Slides.
+
+### Option D: Copy the diagrams into presentation slides
+
+- In GitHub, open the rendered architecture document and take screenshots of each rendered Mermaid diagram.
+- Paste each screenshot into a slide, then add speaker notes or callouts around it.
+- If you want cleaner slide visuals, export the page to PDF first and crop each diagram from the PDF.
+
+### Option E: Clone locally and present from the repo
+
+```bash
+git clone https://github.com/BenOlson14/PavewiseRainGuage.git
+cd PavewiseRainGuage
+```
+
+Then open `docs/system-architecture.md` in a Markdown viewer that supports Mermaid, such as GitHub, VS Code Markdown Preview, or another Mermaid-compatible renderer.
+
