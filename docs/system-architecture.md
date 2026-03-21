@@ -21,22 +21,22 @@ flowchart LR
         MCU <--> LTE
     end
 
-    LTE -- HTTP POST to /ingest --> CELL[(Cellular Network)]
-    CELL --> INTERNET[Public Internet]
+    LTE -- "HTTP POST /ingest" --> CELL((Cellular Network))
+    CELL --> INTERNET["Public Internet"]
 
     subgraph AWS[AWS EC2 Host]
-        SG[Security Group\nAllow TCP 8080\nAllow SSH 22\nRestrict 5432]
-        GUNI[Gunicorn / systemd\npavewise-ingest.service]
-        API[Flask ingest API\nserver/app.py]
-        PG[(PostgreSQL\nrain_gauge_readings)]
-        JOURNAL[systemd journal\nheartbeat + request logs]
-        DETAILS[/connection_details.txt\nserver host/port/path]
+        SG["Security Group<br/>Allow TCP 8080<br/>Allow SSH 22<br/>Restrict 5432"]
+        GUNI["Gunicorn and systemd<br/>pavewise-ingest.service"]
+        API["Flask ingest API<br/>server/app.py"]
+        PG[("PostgreSQL<br/>rain_gauge_readings")]
+        JOURNAL["systemd journal<br/>heartbeat and request logs"]
+        DETAILS["connection_details.txt<br/>server host, port, path"]
 
         SG --> GUNI
         GUNI --> API
         API --> PG
         GUNI --> JOURNAL
-        DETAILS -. setup output .-> GUNI
+        DETAILS -. "setup output" .-> GUNI
     end
 
     INTERNET --> SG
@@ -53,31 +53,31 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    A[Wake from deep sleep] --> B[Reduce power usage\nCPU 80 MHz\nWiFi/BT off]
-    B --> C[Mount SD card\nEnsure /logs /queue /state]
-    C --> D[Load persisted state\nidentity GPS HTTP timing]
-    D --> E[Read rainfall sensor\nand battery ADC]
-    E --> F[Power up SIM7600\nUART + AT checks]
-    F --> G{Network registered?}
-    G -- No --> Q[Keep queue on SD\nLog failure state]
-    G -- Yes --> H[Attach GPRS for HTTP]
-    H --> I{GPS refresh due?\nfirst boot / 6h / retry}
-    I -- Yes --> J[Attempt GNSS fix\nadaptive timeout]
-    I -- No --> K[Use cached location\nand RTC epoch estimate]
+    A["Wake from deep sleep"] --> B["Reduce power usage<br/>CPU 80 MHz<br/>WiFi and BT off"]
+    B --> C["Mount SD card<br/>Ensure logs, queue, state"]
+    C --> D["Load persisted state<br/>identity, GPS, HTTP timing"]
+    D --> E["Read rainfall sensor<br/>and battery ADC"]
+    E --> F["Power up SIM7600<br/>UART and AT checks"]
+    F --> G{"Network registered?"}
+    G -- No --> Q["Keep queue on SD<br/>Log failure state"]
+    G -- Yes --> H["Attach GPRS for HTTP"]
+    H --> I{"GPS refresh due?<br/>first boot, 6h, retry"}
+    I -- Yes --> J["Attempt GNSS fix<br/>adaptive timeout"]
+    I -- No --> K["Use cached location<br/>and RTC epoch estimate"]
     J --> K
-    K --> L[Build compact payload\nIMEI|SERIAL|BATT_MV|RAIN_X100|EPOCH|LAT|LON]
-    L --> M[Append daily CSV log]
-    M --> N[Write queue file to /queue]
-    N --> O{HTTP enabled and online?}
+    K --> L["Build compact payload<br/>IMEI, SERIAL, BATT_MV, RAIN_X100, EPOCH, LAT, LON"]
+    L --> M["Append daily CSV log"]
+    M --> N["Write queue file"]
+    N --> O{"HTTP enabled and online?"}
     O -- No --> Q
-    O -- Yes --> P[Send queued payloads\noldest first]
-    P --> R{HTTP 2xx?}
-    R -- Yes --> S[Delete sent queue file\nrecord HTTP duration]
-    R -- No --> T[Leave file on SD\nretry next wake]
-    S --> U[Graceful modem shutdown]
+    O -- Yes --> P["Send queued payloads<br/>oldest first"]
+    P --> R{"HTTP 2xx?"}
+    R -- Yes --> S["Delete sent queue file<br/>record HTTP duration"]
+    R -- No --> T["Leave file on SD<br/>retry next wake"]
+    S --> U["Graceful modem shutdown"]
     T --> U
     Q --> U
-    U --> V[Deep sleep until next interval]
+    U --> V["Deep sleep until next interval"]
 ```
 
 ## 3. Server ingest and data flow diagram
@@ -90,18 +90,18 @@ sequenceDiagram
     participant DB as PostgreSQL
     participant Logs as App Logs
 
-    Device->>Queue: Write payload file q_<epoch>_<wake>.txt
+    Device->>Queue: Write payload file q_epoch_wake.txt
     Device->>API: HTTP POST compact payload
-    API->>API: Validate IMEI, serial, ints, GPS ranges
+    API->>API: Validate IMEI, serial, integers, and GPS ranges
     alt Invalid payload
-        API->>Logs: warning with invalid_payload details
+        API->>Logs: warning with invalid payload details
         API-->>Device: HTTP 400 JSON error
-        Device->>Queue: Keep payload, retry per policy
+        Device->>Queue: Keep payload and retry per policy
     else Valid payload
-        API->>DB: INSERT rain_gauge_readings
+        API->>DB: Insert into rain_gauge_readings
         DB-->>API: Commit success
         API->>Logs: info db_insert_success
-        API-->>Device: HTTP 200 {status: stored}
+        API-->>Device: HTTP 200 status stored
         Device->>Queue: Delete file after success
     end
 ```
