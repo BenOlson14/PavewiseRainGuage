@@ -856,11 +856,9 @@ static bool gpsAcquire(uint32_t timeoutMs,
     delay(2000);
   }
 
-  // Timeout: ensure GNSS OFF.
-  if (gnssEnabled) {
-    modem.sendAT("+CGPS=0");
-    modem.waitResponse(1000);
-  }
+  // Timeout: best-effort GNSS shutdown even if +CGPS=1 ACK was missed.
+  modem.sendAT("+CGPS=0");
+  modem.waitResponse(1000);
   fixTimeMsOut = elapsedMs(start);
   return false;
 }
