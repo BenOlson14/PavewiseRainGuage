@@ -790,19 +790,42 @@ static bool gpsAcquire(uint32_t timeoutMs,
   hasEpoch = false;
   epochOut = 0;
 
-  // Turn GNSS ON.
-  modem.sendAT("+CGPS=1");
   uint32_t start = millis();
-  if (modem.waitResponse(2000) != 1) {
-    fixTimeMsOut = elapsedMs(start);
-    return false;
-  }
-  // Allow GNSS to settle so GPS queries aren't timing-sensitive to debug logging.
-  delay(300);
-  drainModemSerial();
+  bool gnssEnabled = false;
+  uint32_t lastEnableAttempt = 0;
+  uint32_t lastEnableFailLog = 0;
 
   uint32_t lastProgress = 0;
+  uint32_t lastNoRespLog = 0;
   while (elapsedMs(start) < timeoutMs) {
+    // Keep trying to enable GNSS during the full timeout window.
+    // This guarantees a full acquisition attempt even if modem/GNSS is slow after wake.
+    if (!gnssEnabled && elapsedMs(lastEnableAttempt) >= 3000) {
+      lastEnableAttempt = millis();
+      drainModemSerial();
+      modem.sendAT("+CGPS=1");
+      int en = modem.waitResponse(2500);
+      if (en == 1) {
+        gnssEnabled = true;
+        delay(300);  // settle before first +CGPSINFO query
+        drainModemSerial();
+        DBG_PRINTLN("[GPS] GNSS enabled; starting fix search");
+      } else if (elapsedMs(lastEnableFailLog) >= 15000) {
+        lastEnableFailLog = millis();
+        DBG_PRINTLN("[GPS] GNSS enable not responding yet; will keep trying");
+      }
+    }
+
+    if (!gnssEnabled) {
+      if (elapsedMs(start) - lastProgress >= 5000) {
+        lastProgress = elapsedMs(start);
+        DBG_PRINTF("[GPS] searching... t=%.1f s (waiting for GNSS enable)\n",
+                   lastProgress / 1000.0f);
+      }
+      delay(1000);
+      continue;
+    }
+
     // Ask for GPS info.
     drainModemSerial();
     modem.sendAT("+CGPSINFO");
@@ -820,6 +843,9 @@ static bool gpsAcquire(uint32_t timeoutMs,
         fixTimeMsOut = elapsedMs(start);
         return true;
       }
+    } else if (r != 1 && elapsedMs(lastNoRespLog) >= 15000) {
+      lastNoRespLog = millis();
+      DBG_PRINTLN("[GPS] waiting for +CGPSINFO response...");
     }
 
     if (elapsedMs(start) - lastProgress >= 5000) {
@@ -831,8 +857,10 @@ static bool gpsAcquire(uint32_t timeoutMs,
   }
 
   // Timeout: ensure GNSS OFF.
-  modem.sendAT("+CGPS=0");
-  modem.waitResponse(1000);
+  if (gnssEnabled) {
+    modem.sendAT("+CGPS=0");
+    modem.waitResponse(1000);
+  }
   fixTimeMsOut = elapsedMs(start);
   return false;
 }
@@ -1275,10 +1303,14 @@ void setup() {
       if (baseEpoch == 0) baseEpoch = (uint32_t)(millis() / 1000UL);
       lastGpsFixMs = 0;
       writeUInt32File(FILE_GPS_FIX_MS, lastGpsFixMs);
-      gpsRetryEpoch = baseEpoch + GPS_RETRY_SECONDS;
+      gpsRetryEpoch = (baseEpoch > 0) ? (baseEpoch + GPS_RETRY_SECONDS) : 0;
       writeUInt32File(FILE_GPS_RETRY_EPOCH, gpsRetryEpoch);
-      DBG_PRINTF("[GPS] FIX FAIL (retry scheduled at epoch %lu)\n",
-                    (unsigned long)gpsRetryEpoch);
+      if (gpsRetryEpoch > 0) {
+        DBG_PRINTF("[GPS] FIX FAIL (retry scheduled at epoch %lu)\n",
+                      (unsigned long)gpsRetryEpoch);
+      } else {
+        DBG_PRINTLN("[GPS] FIX FAIL (retry scheduled on next wake; epoch unknown)");
+      }
     }
   } else if (needGps && !modemOk) {
     uint32_t baseEpoch = epochNow;
@@ -1286,10 +1318,14 @@ void setup() {
     if (baseEpoch == 0) baseEpoch = (uint32_t)(millis() / 1000UL);
     lastGpsFixMs = 0;
     writeUInt32File(FILE_GPS_FIX_MS, lastGpsFixMs);
-    gpsRetryEpoch = baseEpoch + GPS_RETRY_SECONDS;
+    gpsRetryEpoch = (baseEpoch > 0) ? (baseEpoch + GPS_RETRY_SECONDS) : 0;
     writeUInt32File(FILE_GPS_RETRY_EPOCH, gpsRetryEpoch);
-    DBG_PRINTF("[GPS] retry scheduled at epoch %lu (modem not OK)\n",
-                  (unsigned long)gpsRetryEpoch);
+    if (gpsRetryEpoch > 0) {
+      DBG_PRINTF("[GPS] retry scheduled at epoch %lu (modem not OK)\n",
+                    (unsigned long)gpsRetryEpoch);
+    } else {
+      DBG_PRINTLN("[GPS] retry scheduled on next wake (modem not OK, epoch unknown)");
+    }
   } else {
     DBG_PRINTLN("[GPS] not due");
   }
