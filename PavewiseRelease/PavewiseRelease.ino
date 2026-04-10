@@ -57,8 +57,12 @@ POWER STRATEGY (SOFTWARE-ONLY):
 #define TINY_GSM_USE_GPRS true
 #define TINY_GSM_USE_WIFI false
 
+#if !defined(ARDUINO_ARCH_ESP32)
+#error "Pavewise firmware targets ESP32 boards. In Arduino IDE, select an ESP32 board (e.g., ESP32 Dev Module), not Arduino Uno."
+#endif
+
 #include <Arduino.h>
-#include <cstring>
+#include <string.h>
 #include <Wire.h>
 #include <SPI.h>
 #include <SD.h>
