@@ -1,6 +1,12 @@
 /************************************************************************************
 Pavewise Mobile Rain Gauge — GPS/STRING TEST BUILD (TestSerial_fixed_gps_NEW.ino)
 
+IMPORTANT ARDUINO IDE NOTE:
+  Keep only this release sketch (.ino) inside the PavewiseRelease sketch folder.
+  If another full sketch file (for example a "*_GpsEvery3Min.ino" variant) exists
+  in the same folder, Arduino compiles both and triggers many "redefinition"
+  errors during Verify/Compile.
+
 SUMMARY (what this build does every wake):
   1) Boots, downclocks CPU, disables WiFi/BT, mounts SD, and purges old logs
      if SD usage is above the threshold.
