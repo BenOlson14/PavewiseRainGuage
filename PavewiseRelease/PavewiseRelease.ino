@@ -138,7 +138,7 @@ static uint32_t elapsedMs(uint32_t startMs) {
   return (uint32_t)(millis() - startMs);
 }
 
-static void drainModemSerial(uint32_t durationMs);
+static void drainModemSerial(uint32_t durationMs = 150);
 
 static bool isValidImei(const String &imei) {
   if (imei.length() != 15) return false;
@@ -225,7 +225,7 @@ static String buildSerialNumber() {
   return String(buf);
 }
 
-static void drainModemSerial(uint32_t durationMs = 150) {
+static void drainModemSerial(uint32_t durationMs) {
   uint32_t start = millis();
   while (elapsedMs(start) < durationMs) {
     while (SerialAT.available()) {
