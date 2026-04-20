@@ -138,12 +138,71 @@ static uint32_t elapsedMs(uint32_t startMs) {
   return (uint32_t)(millis() - startMs);
 }
 
+static void drainModemSerial(uint32_t durationMs);
+
 static bool isValidImei(const String &imei) {
   if (imei.length() != 15) return false;
   for (size_t i = 0; i < imei.length(); i++) {
     if (!isDigit(imei[i])) return false;
   }
   return true;
+}
+
+static bool imeiLuhnValid(const String &imei) {
+  if (!isValidImei(imei)) return false;
+  int sum = 0;
+  bool dbl = false;
+  for (int i = (int)imei.length() - 1; i >= 0; --i) {
+    int d = imei[i] - '0';
+    if (dbl) {
+      d *= 2;
+      if (d > 9) d -= 9;
+    }
+    sum += d;
+    dbl = !dbl;
+  }
+  return (sum % 10) == 0;
+}
+
+static bool extractValidImei(const String &raw, String &imeiOut) {
+  // Fast path for clean modem responses.
+  if (isValidImei(raw) && imeiLuhnValid(raw)) {
+    imeiOut = raw;
+    return true;
+  }
+
+  // Fallback for noisy responses that may include line endings or prefixes.
+  for (int i = 0; i + 15 <= (int)raw.length(); i++) {
+    bool allDigits = true;
+    for (int j = 0; j < 15; j++) {
+      if (!isDigit(raw[i + j])) {
+        allDigits = false;
+        break;
+      }
+    }
+    if (!allDigits) continue;
+
+    String candidate = raw.substring(i, i + 15);
+    if (imeiLuhnValid(candidate)) {
+      imeiOut = candidate;
+      return true;
+    }
+  }
+  return false;
+}
+
+static String readImeiViaAt(const char *cmd, uint32_t timeoutMs = 2500) {
+  drainModemSerial();
+  modem.sendAT(cmd);
+
+  String out;
+  out.reserve(128);
+  int r = modem.waitResponse(timeoutMs, out);
+  if (r != 1) return String();
+
+  String imei;
+  if (extractValidImei(out, imei)) return imei;
+  return String();
 }
 
 static String buildSerialNumber() {
@@ -179,13 +238,24 @@ static void drainModemSerial(uint32_t durationMs = 150) {
 static String readModemImei(uint8_t attempts = 3) {
   for (uint8_t i = 0; i < attempts; i++) {
     drainModemSerial();
-    String imei = modem.getIMEI();
-    imei.trim();
-    if (isValidImei(imei)) {
+    String raw = modem.getIMEI();
+    raw.trim();
+
+    String imei;
+    if (extractValidImei(raw, imei)) {
       return imei;
     }
-    if (imei.length()) {
-      DBG_PRINTF("[MODEM] IMEI read invalid (attempt %u): %s\n", (unsigned)(i + 1), imei.c_str());
+
+    // Fallback for SIM7600 variants that respond better to explicit AT+CGSN.
+    imei = readImeiViaAt("+CGSN");
+    if (imei.length()) return imei;
+
+    // Some firmware still supports legacy AT+GSN path.
+    imei = readImeiViaAt("+GSN");
+    if (imei.length()) return imei;
+
+    if (raw.length()) {
+      DBG_PRINTF("[MODEM] IMEI read invalid (attempt %u): %s\n", (unsigned)(i + 1), raw.c_str());
     }
     delay(200);
   }
@@ -792,6 +862,7 @@ static bool gpsAcquire(uint32_t timeoutMs,
 
   uint32_t start = millis();
   bool gnssEnabled = false;
+  bool allowInfoWithoutEnableAck = false;
   uint32_t lastEnableAttempt = 0;
   uint32_t lastEnableFailLog = 0;
 
@@ -814,9 +885,17 @@ static bool gpsAcquire(uint32_t timeoutMs,
         lastEnableFailLog = millis();
         DBG_PRINTLN("[GPS] GNSS enable not responding yet; will keep trying");
       }
+
+      // Some modem firmwares miss the immediate +CGPS response even when GNSS
+      // is actually active. After an initial enable attempt, allow +CGPSINFO
+      // polling while we keep retrying +CGPS=1 in the background.
+      if (!allowInfoWithoutEnableAck && elapsedMs(start) >= 8000) {
+        allowInfoWithoutEnableAck = true;
+        DBG_PRINTLN("[GPS] proceeding with +CGPSINFO polling without enable ACK");
+      }
     }
 
-    if (!gnssEnabled) {
+    if (!gnssEnabled && !allowInfoWithoutEnableAck) {
       if (elapsedMs(start) - lastProgress >= 5000) {
         lastProgress = elapsedMs(start);
         DBG_PRINTF("[GPS] searching... t=%.1f s (waiting for GNSS enable)\n",
@@ -857,7 +936,7 @@ static bool gpsAcquire(uint32_t timeoutMs,
   }
 
   // Timeout: ensure GNSS OFF.
-  if (gnssEnabled) {
+  if (gnssEnabled || allowInfoWithoutEnableAck) {
     modem.sendAT("+CGPS=0");
     modem.waitResponse(1000);
   }
