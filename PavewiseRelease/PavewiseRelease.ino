@@ -792,6 +792,7 @@ static bool gpsAcquire(uint32_t timeoutMs,
 
   uint32_t start = millis();
   bool gnssEnabled = false;
+  bool allowInfoWithoutEnableAck = false;
   uint32_t lastEnableAttempt = 0;
   uint32_t lastEnableFailLog = 0;
 
@@ -814,9 +815,17 @@ static bool gpsAcquire(uint32_t timeoutMs,
         lastEnableFailLog = millis();
         DBG_PRINTLN("[GPS] GNSS enable not responding yet; will keep trying");
       }
+
+      // Some modem firmwares miss the immediate +CGPS response even when GNSS
+      // is actually active. After an initial enable attempt, allow +CGPSINFO
+      // polling while we keep retrying +CGPS=1 in the background.
+      if (!allowInfoWithoutEnableAck && elapsedMs(start) >= 8000) {
+        allowInfoWithoutEnableAck = true;
+        DBG_PRINTLN("[GPS] proceeding with +CGPSINFO polling without enable ACK");
+      }
     }
 
-    if (!gnssEnabled) {
+    if (!gnssEnabled && !allowInfoWithoutEnableAck) {
       if (elapsedMs(start) - lastProgress >= 5000) {
         lastProgress = elapsedMs(start);
         DBG_PRINTF("[GPS] searching... t=%.1f s (waiting for GNSS enable)\n",
@@ -857,7 +866,7 @@ static bool gpsAcquire(uint32_t timeoutMs,
   }
 
   // Timeout: ensure GNSS OFF.
-  if (gnssEnabled) {
+  if (gnssEnabled || allowInfoWithoutEnableAck) {
     modem.sendAT("+CGPS=0");
     modem.waitResponse(1000);
   }
