@@ -210,7 +210,7 @@ For non-developer technicians:
    - serial number parts
    - APN credentials
    - server host/port/path
-   - wake interval (15 min normal, 3 min for short tests)
+   - wake interval in `utilities.h` (15 min normal, 3 min for short tests)
 5. Select correct COM port and board profile.
 6. Click Upload.
 7. Open Serial Monitor at `115200` baud.
