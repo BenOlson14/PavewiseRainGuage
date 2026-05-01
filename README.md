@@ -18,6 +18,49 @@ At a high level, each wake cycle does this:
 8. Attempt to POST queued payloads oldest-first.
 9. Save state and return to deep sleep.
 
+## Firmware logic flow (code-verified)
+
+The sequence below is verified against `PavewiseRelease/PavewiseRelease.ino` and matches runtime behavior:
+
+1. **Boot + low power prep**
+   - Disables WiFi/Bluetooth, lowers CPU clock, increments RTC wake counters, and mounts SD (`/logs`, `/queue`, `/state`).
+2. **Recover persisted state**
+   - Loads cached identity (ICCID/IMEI), prior rain total, last GPS data, prior GPS-fix duration, last HTTP duration, and GPS retry epoch from SD state files.
+3. **Read sensors**
+   - Reads cumulative rainfall from DFRobot sensor and computes interval rain (`RAIN_X100`), reads battery millivolts.
+4. **Bring up modem + data**
+   - Powers modem pins, initializes UART/modem, waits for AT responsiveness, attempts cellular registration and GPRS session.
+5. **Time and GPS decision**
+   - Computes best epoch from RTC estimate plus cadence.
+   - Triggers GPS refresh when first boot, periodic refresh window reached, or a retry epoch is due.
+   - Uses adaptive GPS timeout (`last_fix_ms * 2`, minimum floor), and schedules retry after failures.
+6. **Payload build**
+   - Builds compact payload string: `IMEI|SERIAL|BATT_MV|RAIN_X100|EPOCH[|LAT|LON]`.
+   - Includes `LAT|LON` only when a GPS refresh succeeds on that wake.
+7. **Durable local write**
+   - Appends payload to daily CSV (`/logs/log_YYYYMMDD.csv`).
+   - Writes one payload-per-file queue entry (`/queue/q_<epoch>_<wake>.txt`).
+8. **Queue upload pass**
+   - Walks queued files oldest-first.
+   - POSTs each payload with adaptive HTTP timeout.
+   - Deletes queue file only after success (or explicit "stored" response semantics).
+9. **Retry and invalid-payload protection**
+   - For invalid payload responses, retries once immediately in-cycle.
+   - Tracks invalid retry counts per queue file under `/state/queue_retry_*.txt`.
+   - Drops repeatedly invalid files only after configured retention window (`PAVEWISE_QUEUE_INVALID_RETENTION_DAYS`) converted to wake cycles.
+10. **Cleanup + sleep**
+   - Persists updated timing/identity/GPS state.
+   - Performs best-effort modem shutdown and enters deep sleep for the configured wake interval.
+
+### Major reliability features
+
+- **Store-and-forward queue:** never depends on live network to preserve measurements.
+- **Oldest-first queue drain:** preserves event order during backlog recovery.
+- **Adaptive timeouts:** GPS and HTTP timeouts adapt to recent observed durations.
+- **GPS retry scheduling:** failed GPS attempts schedule future retries without blocking sensor collection.
+- **Invalid payload guardrail:** bounded retry queue with eventual cleanup to prevent permanent clogging.
+- **Cold-boot recovery:** SD-backed state restores identity/time/rain continuity after power loss.
+
 ---
 
 ## Repository structure (current)
