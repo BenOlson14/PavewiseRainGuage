@@ -108,7 +108,7 @@ Match these exactly to your deployed ingest server.
 #define PAVEWISE_WAKE_INTERVAL_SECONDS (15UL * 60UL)
 ```
 
-Set this in `PavewiseRelease/PavewiseRelease.ino` (near the top, before `#include "utilities.h"`). The sketch defines this macro before including `utilities.h`, so changing it in `utilities.h` will not affect wake cadence. Default is 15 minutes.
+Set this in `PavewiseRelease/utilities.h`. The default is defined there behind `#ifndef`, so updating that value changes wake cadence unless a custom build overrides it elsewhere. Default is 15 minutes.
 
 ### 5) Confirm queue retention behavior
 
@@ -210,7 +210,7 @@ For non-developer technicians:
    - serial number parts
    - APN credentials
    - server host/port/path
-   - wake interval (15 min normal, 3 min for short tests)
+   - wake interval in `utilities.h` (15 min normal, 3 min for short tests)
 5. Select correct COM port and board profile.
 6. Click Upload.
 7. Open Serial Monitor at `115200` baud.
