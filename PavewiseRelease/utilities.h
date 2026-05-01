@@ -230,6 +230,10 @@
 #define PAVEWISE_SD_CS 13
 #endif
 
+#ifndef PAVEWISE_LED
+#define PAVEWISE_LED 12
+#endif
+
 // ============================= SD FILE STRUCTURE =============================
 
 #ifndef PAVEWISE_DIR_LOGS

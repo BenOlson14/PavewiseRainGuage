@@ -1199,6 +1199,8 @@ static float rainDeltaInterval(float totalMm) {
 // ============================= MAIN =============================
 
 void setup() {
+  pinMode(PAVEWISE_LED, OUTPUT);
+  digitalWrite(PAVEWISE_LED, HIGH);
   DBG_BEGIN();
 
   // Power reductions immediately.
