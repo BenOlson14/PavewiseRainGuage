@@ -83,7 +83,6 @@ POWER STRATEGY (SOFTWARE-ONLY):
 // Rain sensor library (DFRobot tipping bucket)
 #include "DFRobot_RainfallSensor.h"
 
-#define PAVEWISE_WAKE_INTERVAL_SECONDS (15UL * 60UL)
 #define PAVEWISE_ENABLE_HTTP true
 #include "utilities.h"
 
