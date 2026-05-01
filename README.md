@@ -108,7 +108,7 @@ Match these exactly to your deployed ingest server.
 #define PAVEWISE_WAKE_INTERVAL_SECONDS (15UL * 60UL)
 ```
 
-Set this in `PavewiseRelease/utilities.h`. The default is defined there behind `#ifndef`, so updating that value changes wake cadence unless a custom build overrides it elsewhere. Default is 15 minutes.
+Set this in `PavewiseRelease/utilities.h` under the user settings section. The firmware now sources wake cadence from `utilities.h`, so changing this value there will take effect. Default is 15 minutes.
 
 ### 5) Confirm queue retention behavior
 
